@@ -1077,219 +1077,291 @@
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
 
-        const NetworkAPI = (() => {
-            let roomRef = null;
-            // Generamos un ID único para tu computadora en esta sesión
-            const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
-            
-            const peers = {}; 
-            const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-            
-            // Variables para rearmar el archivo que llega en pedacitos (P2P)
-            let receivedBuffers = [];
-            let receivingFileMeta = null;
+        /**
+ * NetworkAPI - El motor de comunicación en tiempo real (Firebase + WebRTC)
+ */
+const NetworkAPI = (() => {
+    let roomRef = null;
+    // Generamos un ID único para esta sesión de navegador
+    const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
+    
+    const peers = {}; 
+    const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    
+    // Variables para reconstrucción de archivos P2P
+    let receivedBuffers = [];
+    let receivingFileMeta = null;
 
-            const setupDataChannel = (channel) => {
-                channel.binaryType = 'arraybuffer';
-                channel.onmessage = (event) => {
-                    if (typeof event.data === 'string') {
-                        const msg = JSON.parse(event.data);
-                        if (msg.type === 'FILE_META') {
-                            receivingFileMeta = msg.meta;
-                            receivedBuffers = [];
-                        } else if (msg.type === 'FILE_END') {
-                            const blob = new Blob(receivedBuffers);
-                            const url = URL.createObjectURL(blob);
-                            FileAPI.receiveFile(receivingFileMeta, url);
-                            receivingFileMeta = null;
-                            receivedBuffers = [];
-                        }
-                    } else {
-                        receivedBuffers.push(event.data);
-                    }
-                };
+    // Helper para obtener el nombre del usuario local sin adornos
+    const getMyName = () => {
+        return document.getElementById('local-tag-name').innerText
+            .replace('🎙️ ', '')
+            .replace(' (Tú)', '') || "Usuario";
+    };
+
+    /**
+     * Configura el canal de datos para transferir archivos y mensajes privados
+     */
+    const setupDataChannel = (channel) => {
+        channel.binaryType = 'arraybuffer';
+        channel.onmessage = (event) => {
+            if (typeof event.data === 'string') {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'FILE_META') {
+                    receivingFileMeta = msg.meta;
+                    receivedBuffers = [];
+                } else if (msg.type === 'FILE_END') {
+                    const blob = new Blob(receivedBuffers);
+                    const url = URL.createObjectURL(blob);
+                    FileAPI.receiveFile(receivingFileMeta, url);
+                    receivingFileMeta = null;
+                    receivedBuffers = [];
+                }
+            } else {
+                receivedBuffers.push(event.data);
+            }
+        };
+    };
+
+    /**
+     * Inicializa la conexión WebRTC con un par remoto
+     */
+    const setupWebRTC = async (remoteUserId, isInitiator, remoteUserName = "Invitado") => {
+        // Evitar conexiones duplicadas
+        if (peers[remoteUserId]) return peers[remoteUserId].pc;
+
+        const pc = new RTCPeerConnection(servers);
+        let dataChannel = null;
+
+        if (isInitiator) {
+            dataChannel = pc.createDataChannel('nexus-data');
+            setupDataChannel(dataChannel);
+        } else {
+            pc.ondatachannel = (event) => {
+                dataChannel = event.channel;
+                setupDataChannel(dataChannel);
             };
+        }
 
-            const setupWebRTC = async (remoteUserId, isInitiator) => {
-                // SOLUCIÓN 1: Si ya estamos conectando con esta persona, evitamos duplicados
-                if (peers[remoteUserId]) return peers[remoteUserId].pc;
+        peers[remoteUserId] = { pc, channel: dataChannel };
 
-                const pc = new RTCPeerConnection(servers);
-                let dataChannel = null;
-
-                if (isInitiator) {
-                    dataChannel = pc.createDataChannel('nexus-data');
-                    setupDataChannel(dataChannel);
-                } else {
-                    pc.ondatachannel = (event) => {
-                        dataChannel = event.channel;
-                        setupDataChannel(dataChannel);
-                    };
-                }
-
-                // Guardamos la conexión
-                peers[remoteUserId] = { pc, channel: dataChannel };
-
-                // SOLUCIÓN 2: Detectar si la persona se desconectó/cerró la pestaña
-                pc.oniceconnectionstatechange = () => {
-                    if(pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
-                        const card = document.getElementById(`card-remote-${remoteUserId}`);
-                        if(card) card.remove(); // Borramos su video de la pantalla
-                        delete peers[remoteUserId];
-                    }
-                };
-
-                // 1. Crear tarjeta de video para este invitado
-                const grid = document.getElementById('mainGrid');
-                const cardId = `card-remote-${remoteUserId}`;
+        // Limpieza automática al desconectarse
+        pc.oniceconnectionstatechange = () => {
+            const state = pc.iceConnectionState;
+            if(state === 'disconnected' || state === 'failed' || state === 'closed') {
+                // Eliminar video de la grilla
+                const card = document.getElementById(`card-remote-${remoteUserId}`);
+                if(card) card.remove();
                 
-                if(!document.getElementById(cardId)) {
-                    const card = document.createElement('div');
-                    card.className = 'video-card';
-                    card.id = cardId;
-                    card.innerHTML = `
-                        <video id="video-${remoteUserId}" autoplay playsinline></video>
-                        <div class="card-overlays"><div class="tag-name">Invitado</div></div>
-                        <div class="hover-controls">
-                            <button class="btn-overlay" onclick="UIAPI.toggleTheater(this.parentElement.parentElement)">📌</button>
-                            <button class="btn-overlay" onclick="UIAPI.toggleFullScreen(this.parentElement.parentElement)">🔲</button>
-                        </div>
-                    `;
-                    grid.appendChild(card);
-                }
-
-                // Añadimos nuestra cámara para que el otro la vea
-                const localStream = MediaAPI.getLocalStream();
-                if(localStream) {
-                    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-                }
-
-                // SOLUCIÓN 3: Asignación directa y forzada de video (Evita pantalla negra en celulares)
-                pc.ontrack = (event) => {
-                    const videoEl = document.getElementById(`video-${remoteUserId}`);
-                    if (videoEl && videoEl.srcObject !== event.streams[0]) {
-                        videoEl.srcObject = event.streams[0];
-                    }
-                };
-
-                // Sincronización de IPs
-                pc.onicecandidate = (event) => {
-                    if(event.candidate) {
-                        NetworkAPI.broadcastEvent('ICE', { 
-                            candidate: event.candidate.toJSON(), 
-                            targetId: remoteUserId 
-                        });
-                    }
-                };
-
-                // Si nosotros iniciamos la llamada, enviamos la Oferta
-                if(isInitiator) {
-                    const offer = await pc.createOffer();
-                    await pc.setLocalDescription(offer);
-                    NetworkAPI.broadcastEvent('OFFER', { offer, targetId: remoteUserId });
-                }
+                // Eliminar de la lista de participantes
+                const userItem = document.getElementById(`list-user-${remoteUserId}`);
+                if(userItem) userItem.remove();
                 
-                return pc;
-            };
+                delete peers[remoteUserId];
+            }
+        };
 
-            return {
-                initRoom: (roomId, isHost) => {
-                    roomRef = database.ref('rooms/' + roomId + '/events');
-                    
-                    roomRef.on('child_added', async (snapshot) => {
-                        const event = snapshot.val();
-                        if(event.senderId === localUserId) return; 
+        // Crear elemento visual en la grilla si no existe
+        const grid = document.getElementById('mainGrid');
+        const cardId = `card-remote-${remoteUserId}`;
+        
+        if(!document.getElementById(cardId)) {
+            const card = document.createElement('div');
+            card.className = 'video-card';
+            card.id = cardId;
+            card.ondblclick = function() { UIAPI.toggleTheater(this); };
+            card.innerHTML = `
+                <video id="video-${remoteUserId}" autoplay playsinline></video>
+                <div class="card-overlays"><div class="tag-name">${remoteUserName}</div></div>
+                <div class="hover-controls">
+                    <button class="btn-overlay" title="Fijar" onclick="UIAPI.toggleTheater(this.parentElement.parentElement)">📌</button>
+                    <button class="btn-overlay" title="Pantalla Completa" onclick="UIAPI.toggleFullScreen(this.parentElement.parentElement)">🔲</button>
+                </div>
+            `;
+            grid.appendChild(card);
+        }
 
-                        // SOLUCIÓN 4: REGLA MATEMÁTICA ANTI-CHOQUES DE CONEXIÓN
-                        if(event.type === 'HELLO') {
-                            // Si detectamos a alguien, SOLO el que tenga el ID mayor inicia la llamada
-                            if (localUserId > event.senderId) {
-                                await setupWebRTC(event.senderId, true);
-                            }
+        // Agregar a la lista de "Todos" en el Sidebar
+        const usersList = document.getElementById('usersList');
+        if(!document.getElementById(`list-user-${remoteUserId}`)) {
+            usersList.innerHTML += `
+                <div class="file-item" id="list-user-${remoteUserId}" style="justify-content: space-between;">
+                    <span>👤 ${remoteUserName}</span>
+                </div>`;
+        }
+
+        // Transmitir nuestra cámara/micro al par remoto
+        const localStream = MediaAPI.getLocalStream();
+        if(localStream) {
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+        }
+
+        // Recibir el video del par remoto
+        pc.ontrack = (event) => {
+            const videoEl = document.getElementById(`video-${remoteUserId}`);
+            if (videoEl && videoEl.srcObject !== event.streams[0]) {
+                videoEl.srcObject = event.streams[0];
+            }
+        };
+
+        // Intercambio de candidatos ICE (puentes de red)
+        pc.onicecandidate = (event) => {
+            if(event.candidate) {
+                NetworkAPI.broadcastEvent('ICE', { 
+                    candidate: event.candidate.toJSON(), 
+                    targetId: remoteUserId 
+                });
+            }
+        };
+
+        // Negociación inicial
+        if(isInitiator) {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            NetworkAPI.broadcastEvent('OFFER', { 
+                offer, 
+                targetId: remoteUserId, 
+                userName: getMyName() 
+            });
+        }
+        
+        return pc;
+    };
+
+    return {
+        /**
+         * Conecta a la sala de Firebase y escucha eventos
+         */
+        initRoom: (roomId, isHost) => {
+            roomRef = database.ref('rooms/' + roomId + '/events');
+            
+            roomRef.on('child_added', async (snapshot) => {
+                const event = snapshot.val();
+                if(event.senderId === localUserId) return; 
+
+                switch(event.type) {
+                    case 'HELLO':
+                        // El que tiene el ID más alto inicia la llamada para evitar colisiones
+                        if (localUserId > event.senderId) {
+                            await setupWebRTC(event.senderId, true, event.data.userName);
                         }
-                        else if(event.type === 'OFFER' && event.data.targetId === localUserId) {
-                            const pc = await setupWebRTC(event.senderId, false);
+                        break;
+
+                    case 'OFFER':
+                        if (event.data.targetId === localUserId) {
+                            const pc = await setupWebRTC(event.senderId, false, event.data.userName);
                             await pc.setRemoteDescription(new RTCSessionDescription(event.data.offer));
                             const answer = await pc.createAnswer();
                             await pc.setLocalDescription(answer);
-                            NetworkAPI.broadcastEvent('ANSWER', { answer, targetId: event.senderId });
+                            NetworkAPI.broadcastEvent('ANSWER', { 
+                                answer, 
+                                targetId: event.senderId, 
+                                userName: getMyName() 
+                            });
                         }
-                        else if(event.type === 'ANSWER' && event.data.targetId === localUserId) {
+                        break;
+
+                    case 'ANSWER':
+                        if (event.data.targetId === localUserId) {
                             const pc = peers[event.senderId]?.pc;
-                            if(pc) await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
+                            if(pc) {
+                                await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
+                                // Actualizar nombre por si cambió durante la negociación
+                                const cardTag = document.querySelector(`#card-remote-${event.senderId} .tag-name`);
+                                if(cardTag) cardTag.innerText = event.data.userName;
+                            }
                         }
-                        else if(event.type === 'ICE' && event.data.targetId === localUserId) {
+                        break;
+
+                    case 'ICE':
+                        if (event.data.targetId === localUserId) {
                             const pc = peers[event.senderId]?.pc;
                             if(pc) await pc.addIceCandidate(new RTCIceCandidate(event.data.candidate));
                         }
-                        
-                        // Datos de interfaz
-                        else if(event.type === 'CHAT_MESSAGE') {
-                            ChatAPI.receive(event.data.sender, event.data.text);
-                        }
-                        else if(event.type === 'SUBTITLE') {
-                            SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
-                        }
-                        else if(event.type === 'SCREEN_SHARE_STARTED') {
-                            const chat = document.getElementById('chatWindow');
-                            chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 El presentador comparte pantalla. ¡Clic para ampliar!</div></div>`;
-                        }
-                    });
-
-                    // Al entrar, anunciamos nuestra presencia al resto de la sala
-                    setTimeout(() => NetworkAPI.broadcastEvent('HELLO', {}), 1000);
-                },
-                
-                broadcastEvent: (type, data) => {
-                    if(!roomRef) return;
-                    roomRef.push({ 
-                        type, data, 
-                        senderId: localUserId, 
-                        timestamp: firebase.database.ServerValue.TIMESTAMP 
-                    });
-                },
-
-                broadcastSubtitle: (userName, text) => {
-                    SpeechAPI.displaySubtitle(userName, text); 
-                    if(roomRef) roomRef.push({ type: 'SUBTITLE', data: { userName: userName, text: text }, senderId: localUserId });
-                },
-
-                // Envío de Archivos a TODOS los conectados en la red P2P
-                sendFileP2P: (file) => {
-                    const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
+                        break;
                     
-                    Object.values(peers).forEach(peer => {
-                        const dc = peer.channel;
-                        if(dc && dc.readyState === 'open') {
-                            dc.send(JSON.stringify({
-                                type: 'FILE_META',
-                                meta: { name: file.name, size: file.size, type: file.type, sender: myName }
-                            }));
+                    case 'CHAT_MESSAGE':
+                        ChatAPI.receive(event.data.sender, event.data.text);
+                        break;
 
-                            const chunkSize = 16384; 
-                            const reader = new FileReader();
-                            let offset = 0;
+                    case 'SUBTITLE':
+                        SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
+                        break;
 
-                            reader.onload = (e) => {
-                                dc.send(e.target.result); 
-                                offset += e.target.result.byteLength;
-                                if (offset < file.size) {
-                                    readSlice(offset); 
-                                } else {
-                                    dc.send(JSON.stringify({ type: 'FILE_END' }));
-                                }
-                            };
-
-                            const readSlice = (o) => {
-                                const slice = file.slice(offset, o + chunkSize);
-                                reader.readAsArrayBuffer(slice);
-                            };
-                            readSlice(0); 
-                        }
-                    });
+                    case 'SCREEN_SHARE_STARTED':
+                        // Lógica visual para cuando alguien comparte
+                        const chat = document.getElementById('chatWindow');
+                        chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 ${event.data.userName} está compartiendo pantalla.</div></div>`;
+                        break;
                 }
-            };
-        })();
+            });
+
+            // Anunciar nuestra llegada a la sala
+            setTimeout(() => {
+                NetworkAPI.broadcastEvent('HELLO', { userName: getMyName() });
+            }, 1000);
+        },
+        
+        /**
+         * Envía un evento a todos los miembros de la sala vía Firebase
+         */
+        broadcastEvent: (type, data) => {
+            if(!roomRef) return;
+            roomRef.push({ 
+                type, 
+                data, 
+                senderId: localUserId, 
+                timestamp: firebase.database.ServerValue.TIMESTAMP 
+            });
+        },
+
+        /**
+         * Envía subtítulos procesados
+         */
+        broadcastSubtitle: (userName, text) => {
+            SpeechAPI.displaySubtitle(userName, text); 
+            NetworkAPI.broadcastEvent('SUBTITLE', { userName, text });
+        },
+
+        /**
+         * Envía un archivo físico bit a bit a través del canal de datos P2P
+         */
+        sendFileP2P: (file) => {
+            const myName = getMyName();
+            
+            Object.values(peers).forEach(peer => {
+                const dc = peer.channel;
+                if(dc && dc.readyState === 'open') {
+                    // Enviar metadatos primero
+                    dc.send(JSON.stringify({
+                        type: 'FILE_META',
+                        meta: { name: file.name, size: file.size, type: file.type, sender: myName }
+                    }));
+
+                    const chunkSize = 16384; // 16KB por paquete
+                    const reader = new FileReader();
+                    let offset = 0;
+
+                    reader.onload = (e) => {
+                        dc.send(e.target.result); 
+                        offset += e.target.result.byteLength;
+                        if (offset < file.size) {
+                            readSlice(offset); 
+                        } else {
+                            dc.send(JSON.stringify({ type: 'FILE_END' }));
+                        }
+                    };
+
+                    const readSlice = (o) => {
+                        const slice = file.slice(offset, o + chunkSize);
+                        reader.readAsArrayBuffer(slice);
+                    };
+                    readSlice(0); 
+                }
+            });
+        }
+    };
+})();
 
 /**
  * 7. API DE SUBTÍTULOS IA (ACTUALIZADA)
@@ -1363,10 +1435,9 @@ const SpeechAPI = (() => {
         displaySubtitle: (sender, text) => {
             if(!isCCEnabled) return;
 
+            // 1. Mostrar en el panel lateral (tu código original)
             const subsWindow = document.getElementById('subsWindow');
             const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
-            
-            // Creamos una burbuja similar a la del chat, pero con un estilo ligeramente distinto
             subsWindow.innerHTML += `
                 <div class="msg">
                     <div class="msg-header"><span>${sender}</span><span>${time}</span></div>
@@ -1375,12 +1446,19 @@ const SpeechAPI = (() => {
                     </div>
                 </div>
             `;
-            
-            // Auto-scroll hacia abajo para ver el texto más reciente
             subsWindow.scrollTop = subsWindow.scrollHeight;
+
+            // 2. NUEVO: Mostrar en el overlay flotante de la pantalla principal
+            const overlay = document.getElementById('subtitle-overlay');
+            overlay.innerHTML = `<strong style="color: var(--neon-cyan);">${sender}:</strong> ${text}`;
+            overlay.style.display = 'block';
+
+            // Ocultar el subtítulo después de 4 segundos si nadie más habla
+            if (SpeechAPI.hideTimeout) clearTimeout(SpeechAPI.hideTimeout);
+            SpeechAPI.hideTimeout = setTimeout(() => {
+                overlay.style.display = 'none';
+            }, 4000);
         }
-    };
-})();
 
         /**
          * 8. API DE GRABACIÓN LOCAL (MEDIA RECORDER)
