@@ -1081,198 +1081,116 @@
             let roomRef = null;
             const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
             
-            let peerConnection = null;
-            let remoteStream = null;
-            let dataChannel = null; // <-- NUEVO: El tubo para archivos
-            const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }; 
+            // --- CAMBIO CLAVE: Ahora manejamos múltiples conexiones ---
+            const peers = {}; 
+            const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-            // Variables para rearmar el archivo que llega en pedacitos
-            let receivedBuffers = [];
-            let receivingFileMeta = null;
+            const setupWebRTC = async (remoteUserId, isInitiator) => {
+                // Si ya tenemos conexión con este usuario, no hacemos nada
+                if (peers[remoteUserId]) return;
 
-            // Configurar el tubo P2P
-            const setupDataChannel = (channel) => {
-                channel.binaryType = 'arraybuffer';
-                channel.onmessage = (event) => {
-                    if (typeof event.data === 'string') {
-                        // Recibimos instrucciones (metadatos)
-                        const msg = JSON.parse(event.data);
-                        if (msg.type === 'FILE_META') {
-                            receivingFileMeta = msg.meta;
-                            receivedBuffers = []; // Limpiamos la memoria
-                        } else if (msg.type === 'FILE_END') {
-                            // Terminó de llegar. ¡Armamos el archivo!
-                            const blob = new Blob(receivedBuffers);
-                            const url = URL.createObjectURL(blob);
-                            FileAPI.receiveFile(receivingFileMeta, url); // Lo mandamos a la interfaz
-                            receivingFileMeta = null;
-                            receivedBuffers = [];
-                        }
-                    } else {
-                        // Recibimos un trozo de archivo binario
-                        receivedBuffers.push(event.data);
-                    }
-                };
-            };
+                const pc = new RTCPeerConnection(servers);
+                const remoteStream = new MediaStream();
 
-            const setupWebRTC = async (isInitiator) => {
-                peerConnection = new RTCPeerConnection(servers);
-                remoteStream = new MediaStream();
+                // Guardamos la conexión asociada al ID del usuario
+                peers[remoteUserId] = { pc, stream: remoteStream };
 
-                // --- NUEVO: CREAR EL CANAL DE DATOS P2P ---
-                if (isInitiator) {
-                    dataChannel = peerConnection.createDataChannel('nexus-file-transfer');
-                    setupDataChannel(dataChannel);
-                } else {
-                    peerConnection.ondatachannel = (event) => {
-                        dataChannel = event.channel;
-                        setupDataChannel(dataChannel);
-                    };
-                }
-                // ------------------------------------------
-
+                // 1. Crear tarjeta de video DINÁMICA para este usuario específico
                 const grid = document.getElementById('mainGrid');
-                if(!document.getElementById('card-remote')) {
+                const cardId = `card-remote-${remoteUserId}`;
+                
+                if(!document.getElementById(cardId)) {
                     const card = document.createElement('div');
                     card.className = 'video-card';
-                    card.id = 'card-remote';
-                    card.ondblclick = function() { UIAPI.toggleTheater(this); };
+                    card.id = cardId;
                     card.innerHTML = `
-                        <video id="videoRemote" autoplay playsinline></video>
+                        <video id="video-${remoteUserId}" autoplay playsinline></video>
                         <div class="card-overlays"><div class="tag-name">Invitado</div></div>
                         <div class="hover-controls">
-                            <button class="btn-overlay" title="Fijar" onclick="UIAPI.toggleTheater(this.parentElement.parentElement)">📌</button>
-                            <button class="btn-overlay" title="Pantalla Completa" onclick="UIAPI.toggleFullScreen(this.parentElement.parentElement)">🔲</button>
+                            <button class="btn-overlay" onclick="UIAPI.toggleTheater(this.parentElement.parentElement)">📌</button>
+                            <button class="btn-overlay" onclick="UIAPI.toggleFullScreen(this.parentElement.parentElement)">🔲</button>
                         </div>
                     `;
                     grid.appendChild(card);
+                    document.getElementById(`video-${remoteUserId}`).srcObject = remoteStream;
                 }
-                document.getElementById('videoRemote').srcObject = remoteStream;
 
+                // 2. Enviar nuestra cámara a este nuevo usuario
                 const localStream = MediaAPI.getLocalStream();
                 if(localStream) {
-                    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+                    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
                 }
 
-                peerConnection.ontrack = (event) => {
+                // 3. Recibir el video de este usuario específico
+                pc.ontrack = (event) => {
                     event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
                 };
 
-                peerConnection.onicecandidate = (event) => {
+                // 4. Sincronizar internet (ICE) para este usuario
+                pc.onicecandidate = (event) => {
                     if(event.candidate) {
-                        NetworkAPI.broadcastEvent('ICE', event.candidate.toJSON());
+                        NetworkAPI.broadcastEvent('ICE', { 
+                            candidate: event.candidate.toJSON(), 
+                            targetId: remoteUserId 
+                        });
                     }
                 };
 
                 if(isInitiator) {
-                    const offer = await peerConnection.createOffer();
-                    await peerConnection.setLocalDescription(offer);
-                    NetworkAPI.broadcastEvent('OFFER', offer);
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    NetworkAPI.broadcastEvent('OFFER', { offer, targetId: remoteUserId });
                 }
+                
+                return pc;
             };
 
             return {
-                // --- AÑADE ESTA FUNCIÓN NUEVA ---
-                sendFileP2P: (file) => {
-                    if (!dataChannel || dataChannel.readyState !== 'open') {
-                        alert("Esperando a que la otra persona se conecte completamente...");
-                        return;
-                    }
-                    
-                    const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
-
-                    // 1. Avisar qué archivo va a llegar
-                    dataChannel.send(JSON.stringify({
-                        type: 'FILE_META',
-                        meta: { name: file.name, size: file.size, type: file.type, sender: myName }
-                    }));
-
-                    // 2. Picar el archivo en pedacitos de 16KB y enviarlo
-                    const chunkSize = 16384; 
-                    const reader = new FileReader();
-                    let offset = 0;
-
-                    reader.onload = (e) => {
-                        dataChannel.send(e.target.result); // Envía el trozo
-                        offset += e.target.result.byteLength;
-                        if (offset < file.size) {
-                            readSlice(offset); // Lee el siguiente trozo
-                        } else {
-                            // 3. Avisar que terminamos
-                            dataChannel.send(JSON.stringify({ type: 'FILE_END' }));
-                        }
-                    };
-
-                    const readSlice = (o) => {
-                        const slice = file.slice(offset, o + chunkSize);
-                        reader.readAsArrayBuffer(slice);
-                    };
-                    
-                    readSlice(0); // Inicia el proceso
-                },
                 initRoom: (roomId, isHost) => {
                     roomRef = database.ref('rooms/' + roomId + '/events');
                     
                     roomRef.on('child_added', async (snapshot) => {
                         const event = snapshot.val();
-                        if(event.senderId === localUserId) return; // Ignorar mis propios ecos
+                        if(event.senderId === localUserId) return; 
 
-                        // --- LÓGICA DE CONEXIÓN DE LLAMADA ---
+                        // Lógica de negociación dirigida
                         if(event.type === 'GUEST_JOINED') {
-                            if(typeof AudioAPI !== 'undefined') AudioAPI.playChime();
-                            await setupWebRTC(true); // El Host contesta y crea la tubería
+                            // Cuando alguien entra, el Host inicia conexión con él
+                            await setupWebRTC(event.senderId, true);
                         }
-                        else if(event.type === 'OFFER') {
-                            await setupWebRTC(false); // El invitado recibe la tubería
-                            await peerConnection.setRemoteDescription(new RTCSessionDescription(event.data));
-                            const answer = await peerConnection.createAnswer();
-                            await peerConnection.setLocalDescription(answer);
-                            NetworkAPI.broadcastEvent('ANSWER', answer);
+                        else if(event.type === 'OFFER' && event.data.targetId === localUserId) {
+                            const pc = await setupWebRTC(event.senderId, false);
+                            await pc.setRemoteDescription(new RTCSessionDescription(event.data.offer));
+                            const answer = await pc.createAnswer();
+                            await pc.setLocalDescription(answer);
+                            NetworkAPI.broadcastEvent('ANSWER', { answer, targetId: event.senderId });
                         }
-                        else if(event.type === 'ANSWER') {
-                            await peerConnection.setRemoteDescription(new RTCSessionDescription(event.data));
+                        else if(event.type === 'ANSWER' && event.data.targetId === localUserId) {
+                            const pc = peers[event.senderId].pc;
+                            await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
                         }
-                        else if(event.type === 'ICE' && peerConnection) {
-                            await peerConnection.addIceCandidate(new RTCIceCandidate(event.data));
+                        else if(event.type === 'ICE' && event.data.targetId === localUserId) {
+                            const pc = peers[event.senderId]?.pc;
+                            if(pc) await pc.addIceCandidate(new RTCIceCandidate(event.data.candidate));
                         }
-                        // --- FIN LÓGICA DE VIDEO ---
-
-                        // Evento de Pantalla Compartida
-                        else if(event.type === 'SCREEN_SHARE_STARTED') {
-                            const chat = document.getElementById('chatWindow');
-                            chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 El presentador comparte pantalla. ¡Clic para ampliar!</div></div>`;
-                        }
-                        
-                        // --- AÑADE ESTAS LÍNEAS AQUÍ ---
-                        // Evento de Chat Real
                         else if(event.type === 'CHAT_MESSAGE') {
-                            // Si llega un mensaje, lo mandamos a la interfaz del chat
                             ChatAPI.receive(event.data.sender, event.data.text);
                         }
-                        // Evento de Subtítulos Reales
-                        else if(event.type === 'SUBTITLE') {
-                            SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
-                        }
-                        // ------------------------------
                     });
 
-                    // Si soy un invitado, le aviso a la sala que acabo de llegar
                     if(!isHost) {
-                        setTimeout(() => NetworkAPI.broadcastEvent('GUEST_JOINED'), 1500);
+                        setTimeout(() => NetworkAPI.broadcastEvent('GUEST_JOINED'), 1000);
                     }
                 },
                 
                 broadcastEvent: (type, data) => {
                     if(!roomRef) return;
-                    roomRef.push({ type: type, data: data || {}, senderId: localUserId, timestamp: firebase.database.ServerValue.TIMESTAMP });
-                },
-
-                broadcastSubtitle: (userName, text) => {
-    // Lo muestro en mi PC
-    SpeechAPI.displaySubtitle(userName, text); 
-    // Lo envío a Firebase para el resto
-    if(roomRef) roomRef.push({ type: 'SUBTITLE', data: { userName: userName, text: text }, senderId: localUserId });
-}
+                    roomRef.push({ 
+                        type, data, 
+                        senderId: localUserId, 
+                        timestamp: firebase.database.ServerValue.TIMESTAMP 
+                    });
+                }
             };
         })();
 
