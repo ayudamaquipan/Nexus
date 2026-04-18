@@ -1063,305 +1063,259 @@
          * SIMULADOR DE RED -> AHORA ES REAL CON FIREBASE
          */
         // Pega AQUÍ el código que te dio Firebase (reemplaza este objeto con tus datos reales)
+        // --- INICIO DE CONFIGURACIÓN FIREBASE ---
         const firebaseConfig = {
-  apiKey: "AIzaSyBELSf6iipXPA1FLYSww9mlIG29LtQvcG0",
-  authDomain: "chatteam-e4b1c.firebaseapp.com",
-  databaseURL: "https://chatteam-e4b1c-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "chatteam-e4b1c",
-  storageBucket: "chatteam-e4b1c.firebasestorage.app",
-  messagingSenderId: "203833104772",
-  appId: "1:203833104772:web:46298e3ecd90c36e43e5d1"
-};
+          apiKey: "AIzaSyBELSf6iipXPA1FLYSww9mlIG29LtQvcG0",
+          authDomain: "chatteam-e4b1c.firebaseapp.com",
+          databaseURL: "https://chatteam-e4b1c-default-rtdb.europe-west1.firebasedatabase.app",
+          projectId: "chatteam-e4b1c",
+          storageBucket: "chatteam-e4b1c.firebasestorage.app",
+          messagingSenderId: "203833104772",
+          appId: "1:203833104772:web:46298e3ecd90c36e43e5d1"
+        };
 
-        // Inicializamos Firebase
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
 
-        /**
- * NetworkAPI - El motor de comunicación en tiempo real (Firebase + WebRTC)
- */
-const NetworkAPI = (() => {
-    let roomRef = null;
-    // Generamos un ID único para esta sesión de navegador
-    const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
-    
-    const peers = {}; 
-    const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-    
-    // Variables para reconstrucción de archivos P2P
-    let receivedBuffers = [];
-    let receivingFileMeta = null;
+        // --- MOTOR DE COMUNICACIÓN EN RED ---
+        const NetworkAPI = (() => {
+            let roomRef = null;
+            const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
+            
+            const peers = {}; 
+            const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            
+            let receivedBuffers = [];
+            let receivingFileMeta = null;
 
-    // Helper para obtener el nombre del usuario local sin adornos
-    const getMyName = () => {
-        return document.getElementById('local-tag-name').innerText
-            .replace('🎙️ ', '')
-            .replace(' (Tú)', '') || "Usuario";
-    };
-
-    /**
-     * Configura el canal de datos para transferir archivos y mensajes privados
-     */
-    const setupDataChannel = (channel) => {
-        channel.binaryType = 'arraybuffer';
-        channel.onmessage = (event) => {
-            if (typeof event.data === 'string') {
-                const msg = JSON.parse(event.data);
-                if (msg.type === 'FILE_META') {
-                    receivingFileMeta = msg.meta;
-                    receivedBuffers = [];
-                } else if (msg.type === 'FILE_END') {
-                    const blob = new Blob(receivedBuffers);
-                    const url = URL.createObjectURL(blob);
-                    FileAPI.receiveFile(receivingFileMeta, url);
-                    receivingFileMeta = null;
-                    receivedBuffers = [];
-                }
-            } else {
-                receivedBuffers.push(event.data);
-            }
-        };
-    };
-
-    /**
-     * Inicializa la conexión WebRTC con un par remoto
-     */
-    const setupWebRTC = async (remoteUserId, isInitiator, remoteUserName = "Invitado") => {
-        // Evitar conexiones duplicadas
-        if (peers[remoteUserId]) return peers[remoteUserId].pc;
-
-        const pc = new RTCPeerConnection(servers);
-        let dataChannel = null;
-
-        if (isInitiator) {
-            dataChannel = pc.createDataChannel('nexus-data');
-            setupDataChannel(dataChannel);
-        } else {
-            pc.ondatachannel = (event) => {
-                dataChannel = event.channel;
-                setupDataChannel(dataChannel);
+            const getMyName = () => {
+                return document.getElementById('local-tag-name').innerText
+                    .replace('🎙️ ', '')
+                    .replace(' (Tú)', '') || "Usuario";
             };
-        }
 
-        peers[remoteUserId] = { pc, channel: dataChannel };
+            const setupDataChannel = (channel) => {
+                channel.binaryType = 'arraybuffer';
+                channel.onmessage = (event) => {
+                    if (typeof event.data === 'string') {
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === 'FILE_META') {
+                            receivingFileMeta = msg.meta;
+                            receivedBuffers = [];
+                        } else if (msg.type === 'FILE_END') {
+                            const blob = new Blob(receivedBuffers);
+                            const url = URL.createObjectURL(blob);
+                            FileAPI.receiveFile(receivingFileMeta, url);
+                            receivingFileMeta = null;
+                            receivedBuffers = [];
+                        }
+                    } else {
+                        receivedBuffers.push(event.data);
+                    }
+                };
+            };
 
-        // Limpieza automática al desconectarse
-        pc.oniceconnectionstatechange = () => {
-            const state = pc.iceConnectionState;
-            if(state === 'disconnected' || state === 'failed' || state === 'closed') {
-                // Eliminar video de la grilla
-                const card = document.getElementById(`card-remote-${remoteUserId}`);
-                if(card) card.remove();
+            const setupWebRTC = async (remoteUserId, isInitiator, remoteUserName = "Invitado") => {
+                if (peers[remoteUserId]) return peers[remoteUserId].pc;
+
+                const pc = new RTCPeerConnection(servers);
+                let dataChannel = null;
+
+                if (isInitiator) {
+                    dataChannel = pc.createDataChannel('nexus-data');
+                    setupDataChannel(dataChannel);
+                } else {
+                    pc.ondatachannel = (event) => {
+                        dataChannel = event.channel;
+                        setupDataChannel(dataChannel);
+                    };
+                }
+
+                peers[remoteUserId] = { pc, channel: dataChannel };
+
+                pc.oniceconnectionstatechange = () => {
+                    const state = pc.iceConnectionState;
+                    if(state === 'disconnected' || state === 'failed' || state === 'closed') {
+                        const card = document.getElementById(`card-remote-${remoteUserId}`);
+                        if(card) card.remove();
+                        const userItem = document.getElementById(`list-user-${remoteUserId}`);
+                        if(userItem) userItem.remove();
+                        delete peers[remoteUserId];
+                    }
+                };
+
+                const grid = document.getElementById('mainGrid');
+                const cardId = `card-remote-${remoteUserId}`;
                 
-                // Eliminar de la lista de participantes
-                const userItem = document.getElementById(`list-user-${remoteUserId}`);
-                if(userItem) userItem.remove();
+                if(!document.getElementById(cardId)) {
+                    const card = document.createElement('div');
+                    card.className = 'video-card';
+                    card.id = cardId;
+                    card.ondblclick = function() { UIAPI.toggleTheater(this); };
+                    card.innerHTML = `
+                        <video id="video-${remoteUserId}" autoplay playsinline></video>
+                        <div class="card-overlays"><div class="tag-name">${remoteUserName}</div></div>
+                        <div class="hover-controls">
+                            <button class="btn-overlay" title="Fijar" onclick="UIAPI.toggleTheater(this.parentElement.parentElement)">📌</button>
+                            <button class="btn-overlay" title="Pantalla Completa" onclick="UIAPI.toggleFullScreen(this.parentElement.parentElement)">🔲</button>
+                        </div>
+                    `;
+                    grid.appendChild(card);
+                }
+
+                const usersList = document.getElementById('usersList');
+                if(!document.getElementById(`list-user-${remoteUserId}`)) {
+                    usersList.innerHTML += `
+                        <div class="file-item" id="list-user-${remoteUserId}" style="justify-content: space-between;">
+                            <span>👤 ${remoteUserName}</span>
+                        </div>`;
+                }
+
+                const localStream = MediaAPI.getLocalStream();
+                if(localStream) {
+                    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+                }
+
+                pc.ontrack = (event) => {
+                    const videoEl = document.getElementById(`video-${remoteUserId}`);
+                    if (videoEl && videoEl.srcObject !== event.streams[0]) {
+                        videoEl.srcObject = event.streams[0];
+                    }
+                };
+
+                pc.onicecandidate = (event) => {
+                    if(event.candidate) {
+                        NetworkAPI.broadcastEvent('ICE', { 
+                            candidate: event.candidate.toJSON(), 
+                            targetId: remoteUserId 
+                        });
+                    }
+                };
+
+                if(isInitiator) {
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    NetworkAPI.broadcastEvent('OFFER', { 
+                        offer, 
+                        targetId: remoteUserId, 
+                        userName: getMyName() 
+                    });
+                }
                 
-                delete peers[remoteUserId];
-            }
-        };
+                return pc;
+            };
 
-        // Crear elemento visual en la grilla si no existe
-        const grid = document.getElementById('mainGrid');
-        const cardId = `card-remote-${remoteUserId}`;
-        
-        if(!document.getElementById(cardId)) {
-            const card = document.createElement('div');
-            card.className = 'video-card';
-            card.id = cardId;
-            card.ondblclick = function() { UIAPI.toggleTheater(this); };
-            card.innerHTML = `
-                <video id="video-${remoteUserId}" autoplay playsinline></video>
-                <div class="card-overlays"><div class="tag-name">${remoteUserName}</div></div>
-                <div class="hover-controls">
-                    <button class="btn-overlay" title="Fijar" onclick="UIAPI.toggleTheater(this.parentElement.parentElement)">📌</button>
-                    <button class="btn-overlay" title="Pantalla Completa" onclick="UIAPI.toggleFullScreen(this.parentElement.parentElement)">🔲</button>
-                </div>
-            `;
-            grid.appendChild(card);
-        }
-
-        // Agregar a la lista de "Todos" en el Sidebar
-        const usersList = document.getElementById('usersList');
-        if(!document.getElementById(`list-user-${remoteUserId}`)) {
-            usersList.innerHTML += `
-                <div class="file-item" id="list-user-${remoteUserId}" style="justify-content: space-between;">
-                    <span>👤 ${remoteUserName}</span>
-                </div>`;
-        }
-
-        // Transmitir nuestra cámara/micro al par remoto
-        const localStream = MediaAPI.getLocalStream();
-        if(localStream) {
-            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-        }
-
-        // Recibir el video del par remoto
-        pc.ontrack = (event) => {
-            const videoEl = document.getElementById(`video-${remoteUserId}`);
-            if (videoEl && videoEl.srcObject !== event.streams[0]) {
-                videoEl.srcObject = event.streams[0];
-            }
-        };
-
-        // Intercambio de candidatos ICE (puentes de red)
-        pc.onicecandidate = (event) => {
-            if(event.candidate) {
-                NetworkAPI.broadcastEvent('ICE', { 
-                    candidate: event.candidate.toJSON(), 
-                    targetId: remoteUserId 
-                });
-            }
-        };
-
-        // Negociación inicial
-        if(isInitiator) {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            NetworkAPI.broadcastEvent('OFFER', { 
-                offer, 
-                targetId: remoteUserId, 
-                userName: getMyName() 
-            });
-        }
-        
-        return pc;
-    };
-
-    return {
-        /**
-         * Conecta a la sala de Firebase y escucha eventos
-         */
-        initRoom: (roomId, isHost) => {
-            roomRef = database.ref('rooms/' + roomId + '/events');
-            
-            roomRef.on('child_added', async (snapshot) => {
-                const event = snapshot.val();
-                if(event.senderId === localUserId) return; 
-
-                switch(event.type) {
-                    case 'HELLO':
-                        // El que tiene el ID más alto inicia la llamada para evitar colisiones
-                        if (localUserId > event.senderId) {
-                            await setupWebRTC(event.senderId, true, event.data.userName);
-                        }
-                        break;
-
-                    case 'OFFER':
-                        if (event.data.targetId === localUserId) {
-                            const pc = await setupWebRTC(event.senderId, false, event.data.userName);
-                            await pc.setRemoteDescription(new RTCSessionDescription(event.data.offer));
-                            const answer = await pc.createAnswer();
-                            await pc.setLocalDescription(answer);
-                            NetworkAPI.broadcastEvent('ANSWER', { 
-                                answer, 
-                                targetId: event.senderId, 
-                                userName: getMyName() 
-                            });
-                        }
-                        break;
-
-                    case 'ANSWER':
-                        if (event.data.targetId === localUserId) {
-                            const pc = peers[event.senderId]?.pc;
-                            if(pc) {
-                                await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
-                                // Actualizar nombre por si cambió durante la negociación
-                                const cardTag = document.querySelector(`#card-remote-${event.senderId} .tag-name`);
-                                if(cardTag) cardTag.innerText = event.data.userName;
-                            }
-                        }
-                        break;
-
-                    case 'ICE':
-                        if (event.data.targetId === localUserId) {
-                            const pc = peers[event.senderId]?.pc;
-                            if(pc) await pc.addIceCandidate(new RTCIceCandidate(event.data.candidate));
-                        }
-                        break;
+            return {
+                initRoom: (roomId, isHost) => {
+                    roomRef = database.ref('rooms/' + roomId + '/events');
                     
-                    case 'CHAT_MESSAGE':
-                        ChatAPI.receive(event.data.sender, event.data.text);
-                        break;
+                    roomRef.on('child_added', async (snapshot) => {
+                        const event = snapshot.val();
+                        if(event.senderId === localUserId) return; 
 
-                    case 'SUBTITLE':
-                        SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
-                        break;
-
-                    case 'SCREEN_SHARE_STARTED':
-                        // Lógica visual para cuando alguien comparte
-                        const chat = document.getElementById('chatWindow');
-                        chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 ${event.data.userName} está compartiendo pantalla.</div></div>`;
-                        break;
-                }
-            });
-
-            // Anunciar nuestra llegada a la sala
-            setTimeout(() => {
-                NetworkAPI.broadcastEvent('HELLO', { userName: getMyName() });
-            }, 1000);
-        },
-        
-        /**
-         * Envía un evento a todos los miembros de la sala vía Firebase
-         */
-        broadcastEvent: (type, data) => {
-            if(!roomRef) return;
-            roomRef.push({ 
-                type, 
-                data, 
-                senderId: localUserId, 
-                timestamp: firebase.database.ServerValue.TIMESTAMP 
-            });
-        },
-
-        /**
-         * Envía subtítulos procesados
-         */
-        broadcastSubtitle: (userName, text) => {
-            SpeechAPI.displaySubtitle(userName, text); 
-            NetworkAPI.broadcastEvent('SUBTITLE', { userName, text });
-        },
-
-        /**
-         * Envía un archivo físico bit a bit a través del canal de datos P2P
-         */
-        sendFileP2P: (file) => {
-            const myName = getMyName();
-            
-            Object.values(peers).forEach(peer => {
-                const dc = peer.channel;
-                if(dc && dc.readyState === 'open') {
-                    // Enviar metadatos primero
-                    dc.send(JSON.stringify({
-                        type: 'FILE_META',
-                        meta: { name: file.name, size: file.size, type: file.type, sender: myName }
-                    }));
-
-                    const chunkSize = 16384; // 16KB por paquete
-                    const reader = new FileReader();
-                    let offset = 0;
-
-                    reader.onload = (e) => {
-                        dc.send(e.target.result); 
-                        offset += e.target.result.byteLength;
-                        if (offset < file.size) {
-                            readSlice(offset); 
-                        } else {
-                            dc.send(JSON.stringify({ type: 'FILE_END' }));
+                        switch(event.type) {
+                            case 'HELLO':
+                                if (localUserId > event.senderId) {
+                                    await setupWebRTC(event.senderId, true, event.data.userName);
+                                }
+                                break;
+                            case 'OFFER':
+                                if (event.data.targetId === localUserId) {
+                                    const pc = await setupWebRTC(event.senderId, false, event.data.userName);
+                                    await pc.setRemoteDescription(new RTCSessionDescription(event.data.offer));
+                                    const answer = await pc.createAnswer();
+                                    await pc.setLocalDescription(answer);
+                                    NetworkAPI.broadcastEvent('ANSWER', { 
+                                        answer, 
+                                        targetId: event.senderId, 
+                                        userName: getMyName() 
+                                    });
+                                }
+                                break;
+                            case 'ANSWER':
+                                if (event.data.targetId === localUserId) {
+                                    const pc = peers[event.senderId]?.pc;
+                                    if(pc) {
+                                        await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
+                                        const cardTag = document.querySelector(`#card-remote-${event.senderId} .tag-name`);
+                                        if(cardTag) cardTag.innerText = event.data.userName;
+                                    }
+                                }
+                                break;
+                            case 'ICE':
+                                if (event.data.targetId === localUserId) {
+                                    const pc = peers[event.senderId]?.pc;
+                                    if(pc) await pc.addIceCandidate(new RTCIceCandidate(event.data.candidate));
+                                }
+                                break;
+                            case 'CHAT_MESSAGE':
+                                ChatAPI.receive(event.data.sender, event.data.text);
+                                break;
+                            case 'SUBTITLE':
+                                SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
+                                break;
+                            case 'SCREEN_SHARE_STARTED':
+                                const chat = document.getElementById('chatWindow');
+                                chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 ${event.data.userName} está compartiendo pantalla.</div></div>`;
+                                break;
                         }
-                    };
+                    });
 
-                    const readSlice = (o) => {
-                        const slice = file.slice(offset, o + chunkSize);
-                        reader.readAsArrayBuffer(slice);
-                    };
-                    readSlice(0); 
+                    setTimeout(() => {
+                        NetworkAPI.broadcastEvent('HELLO', { userName: getMyName() });
+                    }, 1000);
+                },
+                
+                broadcastEvent: (type, data) => {
+                    if(!roomRef) return;
+                    roomRef.push({ 
+                        type, 
+                        data, 
+                        senderId: localUserId, 
+                        timestamp: firebase.database.ServerValue.TIMESTAMP 
+                    });
+                },
+
+                broadcastSubtitle: (userName, text) => {
+                    SpeechAPI.displaySubtitle(userName, text); 
+                    NetworkAPI.broadcastEvent('SUBTITLE', { userName, text });
+                },
+
+                sendFileP2P: (file) => {
+                    const myName = getMyName();
+                    
+                    Object.values(peers).forEach(peer => {
+                        const dc = peer.channel;
+                        if(dc && dc.readyState === 'open') {
+                            dc.send(JSON.stringify({
+                                type: 'FILE_META',
+                                meta: { name: file.name, size: file.size, type: file.type, sender: myName }
+                            }));
+
+                            const chunkSize = 16384; 
+                            const reader = new FileReader();
+                            let offset = 0;
+
+                            reader.onload = (e) => {
+                                dc.send(e.target.result); 
+                                offset += e.target.result.byteLength;
+                                if (offset < file.size) {
+                                    readSlice(offset); 
+                                } else {
+                                    dc.send(JSON.stringify({ type: 'FILE_END' }));
+                                }
+                            };
+
+                            const readSlice = (o) => {
+                                const slice = file.slice(offset, o + chunkSize);
+                                reader.readAsArrayBuffer(slice);
+                            };
+                            readSlice(0); 
+                        }
+                    });
                 }
-            });
-        }
-    };
-})();
+            };
+        })();
 
 /**
  * 7. API DE SUBTÍTULOS IA (ACTUALIZADA)
