@@ -451,6 +451,22 @@
             #whiteboard-container { inset: 5px; }
             .wb-tools { overflow-x: auto; flex-wrap: nowrap; padding: 10px; }
             .wb-btn { flex-shrink: 0; padding: 5px 10px; font-size: 0.8rem; }
+            /* Asegurar que el workspace sea visible siempre que el sidebar esté oculto */
+            .app-body {
+                position: relative;
+                overflow: hidden;
+            }
+            
+            .workspace {
+                display: flex !important;
+                flex-direction: column;
+                z-index: 10;
+            }
+
+            /* Si el sidebar está abierto, que esté por encima de todo */
+            .sidebar:not(.hidden) {
+                z-index: 9999 !important;
+            }
         }
     </style>
 </head>
@@ -490,7 +506,10 @@
     <header>
         <div class="header-info">
             <div class="brand-title" style="font-size: 1.5rem;">NEXUS</div>
-            <div class="room-code-display" id="display-room-code">SALA: Generando...</div>
+            <div class="room-code-display" style="display: flex; align-items: center; gap: 10px;">
+                <span id="display-room-code">SALA: Generando...</span>
+                <button onclick="ShareAPI.copyOrShare()" style="background:var(--neon-cyan); border:none; border-radius:4px; padding:4px 10px; cursor:pointer; font-size:0.7rem; color:black; font-weight:bold; letter-spacing:1px;">COMPARTIR</button>
+            </div>
         </div>
         <div class="time-badge" id="reloj">00:00:00</div>
     </header>
@@ -1435,6 +1454,33 @@ const ReactionAPI = (() => {
                     
                     // Recargamos la página para resetear la aplicación
                     window.location.reload();
+                }
+            };
+        })();
+        /**
+         * 14. API DE COMPARTIR (NATIVO MÓVIL)
+         */
+        const ShareAPI = (() => {
+            return {
+                copyOrShare: async () => {
+                    const code = document.getElementById('display-room-code').innerText.replace('SALA: ', '');
+                    // Creamos un link que al abrirlo ya traiga el código (opcional)
+                    const url = window.location.href.split('?')[0];
+                    const text = `¡Únete a mi reunión en NEXUS!\nCódigo: ${code}\nLink: ${url}`;
+
+                    if (navigator.share) {
+                        try {
+                            await navigator.share({
+                                title: 'Invitación Nexus',
+                                text: text,
+                                url: url
+                            });
+                        } catch (err) { /* Cancelado por usuario */ }
+                    } else {
+                        // Fallback para PC si no hay menú de compartir
+                        navigator.clipboard.writeText(text);
+                        alert("Código y link copiados al portapapeles 📋");
+                    }
                 }
             };
         })();
