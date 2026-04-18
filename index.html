@@ -379,84 +379,78 @@
     border-radius: 0;
 }
 /* ==========================================================================
-           13. ADAPTACIÓN PARA DISPOSITIVOS MÓVILES (RESPONSIVE)
+           13. ADAPTACIÓN PARA DISPOSITIVOS MÓVILES (BLINDADA)
            ========================================================================== */
         @media (max-width: 768px) {
-            /* 1. Ajustar el Lobby (Pantalla de inicio) */
+            /* 1. Evitar que la página se mueva hacia los lados (Scroll horizontal roto) */
+            html, body {
+                overflow-x: hidden !important;
+                width: 100% !important;
+                position: relative;
+            }
+
+            /* 2. Arreglar el Lobby inicial */
             .lobby-container {
                 flex-direction: column;
-                padding: 20px;
-                gap: 20px;
-                max-height: 95vh;
-                overflow-y: auto;
+                padding: 15px;
+                width: 90% !important;
+                gap: 15px;
+                margin-top: 10px;
             }
-            .brand-title { font-size: 2rem; }
+            .brand-title { font-size: 1.8rem !important; }
+            .lobby-video-preview { height: 200px; }
 
-            /* 2. Reducir el tamaño del Header */
-            header {
-                padding: 0 15px;
-                height: 60px;
-            }
-            .header-info .brand-title { font-size: 1.2rem !important; }
-            .time-badge { font-size: 0.9rem; padding: 5px 10px; }
-            .app-body { height: calc(100vh - 60px); }
+            /* 3. Header y barra superior */
+            header { padding: 0 15px; height: 60px; }
+            .time-badge { display: none; } /* Ocultamos el reloj en celular para dar espacio */
 
-            /* 3. Ajustar el Espacio de Trabajo y Videos */
+            /* 4. Espacio de trabajo de los videos */
             .workspace {
-                width: 100% !important;
+                width: 100vw !important;
                 padding: 10px;
-                padding-bottom: 90px; /* Deja espacio para que el dock no tape el video */
+                padding-bottom: 100px !important; /* Espacio para no pisar los botones */
             }
             .video-grid {
-                grid-template-columns: 1fr; /* 1 sola columna de video hacia abajo */
+                grid-template-columns: 1fr !important; /* Videos en 1 sola columna vertical */
+                gap: 10px;
             }
 
-            /* 4. El Panel Lateral (Chat/Usuarios) ocupa toda la pantalla */
+            /* 5. Panel Lateral (Chat) ocupa TODA la pantalla al abrirse */
             .sidebar {
-                position: absolute;
+                position: fixed !important;
                 top: 0;
                 right: 0;
-                width: 100%;
-                height: 100%;
-                z-index: 2000;
-                margin-right: 0 !important;
+                width: 100vw !important;
+                height: 100vh !important;
+                z-index: 3000;
+                transition: transform 0.3s ease;
             }
-            .sidebar.hidden {
-                transform: translateX(100%);
-            }
+            .sidebar.hidden { transform: translateX(100%); }
 
-            /* 5. El Dock inferior (ahora deslizable horizontalmente) */
+            /* 6. Menú de botones inferior (Dock) */
             .dock-wrapper {
-                width: 100% !important;
-                bottom: 10px;
+                width: 100vw !important;
+                bottom: 10px !important;
                 padding: 0 10px;
+                position: fixed;
             }
             .dock-container {
                 width: 100%;
                 padding: 10px;
-                gap: 8px;
-                justify-content: flex-start;
-                overflow-x: auto; /* Permite deslizar los botones con el dedo */
+                justify-content: flex-start !important;
+                overflow-x: auto !important; /* Deslizar con el dedo */
+                -webkit-overflow-scrolling: touch;
             }
-            /* Ocultar la barra de scroll fea del dock en celulares */
-            .dock-container::-webkit-scrollbar { display: none; }
-            
             .btn-dock {
-                width: 45px;
-                height: 45px;
+                width: 45px; height: 45px;
                 font-size: 1.1rem;
-                flex-shrink: 0; /* Evita que los botones se aplasten */
+                flex-shrink: 0; /* Impide que los botones se aplasten como acordeón */
             }
 
-            /* 6. Ajustar Modales y Pizarra */
-            .modal-content {
-                width: 90%;
-                padding: 20px;
-            }
-            .wb-tools {
-                flex-wrap: wrap; /* Si hay muchos botones en la pizarra, los pone en dos líneas */
-                justify-content: center;
-            }
+            /* 7. Pizarra interactiva */
+            #whiteboard-container { inset: 5px; }
+            .wb-tools { overflow-x: auto; flex-wrap: nowrap; padding: 10px; }
+            .wb-btn { flex-shrink: 0; padding: 5px 10px; font-size: 0.8rem; }
         }
     </style>
 </head>
