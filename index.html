@@ -1081,21 +1081,55 @@
             let roomRef = null;
             const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
             
-            // --- CAMBIO CLAVE: Ahora manejamos múltiples conexiones ---
             const peers = {}; 
             const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            
+            // Variables para rearmar el archivo que llega en pedacitos (P2P)
+            let receivedBuffers = [];
+            let receivingFileMeta = null;
+
+            const setupDataChannel = (channel) => {
+                channel.binaryType = 'arraybuffer';
+                channel.onmessage = (event) => {
+                    if (typeof event.data === 'string') {
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === 'FILE_META') {
+                            receivingFileMeta = msg.meta;
+                            receivedBuffers = [];
+                        } else if (msg.type === 'FILE_END') {
+                            const blob = new Blob(receivedBuffers);
+                            const url = URL.createObjectURL(blob);
+                            FileAPI.receiveFile(receivingFileMeta, url);
+                            receivingFileMeta = null;
+                            receivedBuffers = [];
+                        }
+                    } else {
+                        receivedBuffers.push(event.data);
+                    }
+                };
+            };
 
             const setupWebRTC = async (remoteUserId, isInitiator) => {
-                // Si ya tenemos conexión con este usuario, no hacemos nada
                 if (peers[remoteUserId]) return;
 
                 const pc = new RTCPeerConnection(servers);
                 const remoteStream = new MediaStream();
+                let dataChannel = null;
 
-                // Guardamos la conexión asociada al ID del usuario
-                peers[remoteUserId] = { pc, stream: remoteStream };
+                if (isInitiator) {
+                    dataChannel = pc.createDataChannel('nexus-data');
+                    setupDataChannel(dataChannel);
+                } else {
+                    pc.ondatachannel = (event) => {
+                        dataChannel = event.channel;
+                        setupDataChannel(dataChannel);
+                    };
+                }
 
-                // 1. Crear tarjeta de video DINÁMICA para este usuario específico
+                // Guardamos todo en nuestro objeto de múltiples conexiones
+                peers[remoteUserId] = { pc, stream: remoteStream, channel: dataChannel };
+
+                // 1. Crear tarjeta de video para este invitado
                 const grid = document.getElementById('mainGrid');
                 const cardId = `card-remote-${remoteUserId}`;
                 
@@ -1115,18 +1149,15 @@
                     document.getElementById(`video-${remoteUserId}`).srcObject = remoteStream;
                 }
 
-                // 2. Enviar nuestra cámara a este nuevo usuario
                 const localStream = MediaAPI.getLocalStream();
                 if(localStream) {
                     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
                 }
 
-                // 3. Recibir el video de este usuario específico
                 pc.ontrack = (event) => {
                     event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
                 };
 
-                // 4. Sincronizar internet (ICE) para este usuario
                 pc.onicecandidate = (event) => {
                     if(event.candidate) {
                         NetworkAPI.broadcastEvent('ICE', { 
@@ -1153,9 +1184,8 @@
                         const event = snapshot.val();
                         if(event.senderId === localUserId) return; 
 
-                        // Lógica de negociación dirigida
+                        // Negociación de WebRTC
                         if(event.type === 'GUEST_JOINED') {
-                            // Cuando alguien entra, el Host inicia conexión con él
                             await setupWebRTC(event.senderId, true);
                         }
                         else if(event.type === 'OFFER' && event.data.targetId === localUserId) {
@@ -1166,15 +1196,23 @@
                             NetworkAPI.broadcastEvent('ANSWER', { answer, targetId: event.senderId });
                         }
                         else if(event.type === 'ANSWER' && event.data.targetId === localUserId) {
-                            const pc = peers[event.senderId].pc;
-                            await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
+                            const pc = peers[event.senderId]?.pc;
+                            if(pc) await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
                         }
                         else if(event.type === 'ICE' && event.data.targetId === localUserId) {
                             const pc = peers[event.senderId]?.pc;
                             if(pc) await pc.addIceCandidate(new RTCIceCandidate(event.data.candidate));
                         }
+                        // Datos de interfaz compartidos
                         else if(event.type === 'CHAT_MESSAGE') {
                             ChatAPI.receive(event.data.sender, event.data.text);
+                        }
+                        else if(event.type === 'SUBTITLE') {
+                            SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
+                        }
+                        else if(event.type === 'SCREEN_SHARE_STARTED') {
+                            const chat = document.getElementById('chatWindow');
+                            chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 El presentador comparte pantalla. ¡Clic para ampliar!</div></div>`;
                         }
                     });
 
@@ -1189,6 +1227,49 @@
                         type, data, 
                         senderId: localUserId, 
                         timestamp: firebase.database.ServerValue.TIMESTAMP 
+                    });
+                },
+
+                // --- AQUÍ ESTÁ LA FUNCIÓN FALTANTE QUE CAUSABA EL COLAPSO ---
+                broadcastSubtitle: (userName, text) => {
+                    SpeechAPI.displaySubtitle(userName, text); 
+                    if(roomRef) roomRef.push({ type: 'SUBTITLE', data: { userName: userName, text: text }, senderId: localUserId });
+                },
+
+                // --- SISTEMA DE ENVÍO DE ARCHIVOS MULTIUSUARIO ---
+                sendFileP2P: (file) => {
+                    const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
+                    
+                    // Recorremos a TODOS los invitados conectados y les enviamos el archivo
+                    Object.values(peers).forEach(peer => {
+                        const dc = peer.channel;
+                        if(dc && dc.readyState === 'open') {
+                            dc.send(JSON.stringify({
+                                type: 'FILE_META',
+                                meta: { name: file.name, size: file.size, type: file.type, sender: myName }
+                            }));
+
+                            const chunkSize = 16384; 
+                            const reader = new FileReader();
+                            let offset = 0;
+
+                            reader.onload = (e) => {
+                                dc.send(e.target.result); 
+                                offset += e.target.result.byteLength;
+                                if (offset < file.size) {
+                                    readSlice(offset); 
+                                } else {
+                                    dc.send(JSON.stringify({ type: 'FILE_END' }));
+                                }
+                            };
+
+                            const readSlice = (o) => {
+                                const slice = file.slice(offset, o + chunkSize);
+                                reader.readAsArrayBuffer(slice);
+                            };
+                            
+                            readSlice(0); 
+                        }
                     });
                 }
             };
