@@ -590,10 +590,8 @@
                     document.getElementById('local-tag-name').innerText = `🎙️ ${userName} (Tú)`;
                     document.getElementById('display-room-code').innerText = `SALA: ${roomCode}`;
                     
-                    // --- AÑADE ESTA LÍNEA AQUÍ ---
-                    // Conectamos este usuario al nodo de Firebase de esta sala
-                    NetworkAPI.initRoom(roomCode);
-                    // -----------------------------
+                    // NUEVO: Le decimos a la red qué sala es y qué rol tenemos
+                    NetworkAPI.initRoom(roomCode, isHost);
 
                     if (isHost) {
                         document.getElementById('btnEndMeeting').style.display = 'flex';
@@ -604,15 +602,14 @@
                     setTimeout(() => overlay.style.display = 'none', 500);
 
                     SpeechAPI.initTranscriber(userName);
-
-                    // Si se creó una sala nueva, simular que alguien quiere entrar tras 5 segundos
-                    if(isHost) {
-                        setTimeout(() => {
-                            document.getElementById('admission-toast').style.display = 'block';
-                            if(typeof AudioAPI !== 'undefined') AudioAPI.playChime();
-                        }, 5000);
+                    if(typeof AudioAPI !== 'undefined') {
+                        const ctx = AudioAPI.getCtx();
+                        if(ctx.state === 'suspended') ctx.resume();
                     }
+                    
+                    // ¡ELIMINAMOS EL SIMULADOR FALSO QUE HABÍA AQUÍ!
                 },
+                
                 // --- FIN DE LA PARTE NUEVA ---
 
                 handleAdmission: (admit) => {
@@ -939,53 +936,109 @@
 
         const NetworkAPI = (() => {
             let roomRef = null;
-            // Creamos un ID único temporal para esta pestaña/usuario
             const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
+            
+            // --- NUEVO: MOTOR WEBRTC PARA VIDEO REAL ---
+            let peerConnection = null;
+            let remoteStream = null;
+            const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }; // El GPS de Internet
+
+            const setupWebRTC = async (isInitiator) => {
+                peerConnection = new RTCPeerConnection(servers);
+                remoteStream = new MediaStream();
+
+                // 1. Crear la tarjeta de video REAL para el invitado
+                const grid = document.getElementById('mainGrid');
+                if(!document.getElementById('card-remote')) {
+                    const card = document.createElement('div');
+                    card.className = 'video-card';
+                    card.id = 'card-remote';
+                    card.ondblclick = function() { UIAPI.toggleTheater(this); };
+                    card.innerHTML = `
+                        <video id="videoRemote" autoplay playsinline></video>
+                        <div class="card-overlays"><div class="tag-name">Invitado</div></div>
+                        <div class="hover-controls">
+                            <button class="btn-overlay" title="Fijar" onclick="UIAPI.toggleTheater(this.parentElement.parentElement)">📌</button>
+                            <button class="btn-overlay" title="Pantalla Completa" onclick="UIAPI.toggleFullScreen(this.parentElement.parentElement)">🔲</button>
+                        </div>
+                    `;
+                    grid.appendChild(card);
+                }
+                document.getElementById('videoRemote').srcObject = remoteStream;
+
+                // 2. Enviar nuestra cámara y micrófono al tubo
+                const localStream = MediaAPI.getLocalStream();
+                if(localStream) {
+                    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+                }
+
+                // 3. Recibir la cámara y micrófono del invitado
+                peerConnection.ontrack = (event) => {
+                    event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+                };
+
+                // 4. Sincronizar conexiones de internet (Candidatos ICE)
+                peerConnection.onicecandidate = (event) => {
+                    if(event.candidate) {
+                        NetworkAPI.broadcastEvent('ICE', event.candidate.toJSON());
+                    }
+                };
+
+                // 5. Si somos el Host, iniciamos la "Oferta" de llamada
+                if(isInitiator) {
+                    const offer = await peerConnection.createOffer();
+                    await peerConnection.setLocalDescription(offer);
+                    NetworkAPI.broadcastEvent('OFFER', offer);
+                }
+            };
 
             return {
-                // Esta función se llamará cuando entres a una sala
-                initRoom: (roomId) => {
-                    // Creamos una "carpeta" en Firebase para esta sala específica
+                initRoom: (roomId, isHost) => {
                     roomRef = database.ref('rooms/' + roomId + '/events');
                     
-                    // ESCUCHAR: Qué pasa cuando alguien más envía un dato a Firebase
-                    roomRef.on('child_added', (snapshot) => {
+                    roomRef.on('child_added', async (snapshot) => {
                         const event = snapshot.val();
-                        
-                        // Ignoramos nuestros propios mensajes para no hacer eco
-                        if(event.senderId === localUserId) return; 
+                        if(event.senderId === localUserId) return; // Ignorar mis propios ecos
 
-                        console.log(`📡 Recibido desde la nube: ${event.type}`);
-                        
-                        if(event.type === 'SCREEN_SHARE_STARTED') {
-                            const chat = document.getElementById('chatWindow');
-                            chat.innerHTML += `
-                                <div class="msg">
-                                    <div class="msg-bubble" style="background:var(--neon-purple); color:white; text-align:center;">
-                                        📺 Alguien empezó a compartir pantalla en la sala.
-                                    </div>
-                                </div>`;
-                            chat.scrollTop = chat.scrollHeight;
+                        // --- LÓGICA DE CONEXIÓN DE LLAMADA ---
+                        if(event.type === 'GUEST_JOINED') {
                             if(typeof AudioAPI !== 'undefined') AudioAPI.playChime();
+                            await setupWebRTC(true); // El Host contesta y crea la tubería
+                        }
+                        else if(event.type === 'OFFER') {
+                            await setupWebRTC(false); // El invitado recibe la tubería
+                            await peerConnection.setRemoteDescription(new RTCSessionDescription(event.data));
+                            const answer = await peerConnection.createAnswer();
+                            await peerConnection.setLocalDescription(answer);
+                            NetworkAPI.broadcastEvent('ANSWER', answer);
+                        }
+                        else if(event.type === 'ANSWER') {
+                            await peerConnection.setRemoteDescription(new RTCSessionDescription(event.data));
+                        }
+                        else if(event.type === 'ICE' && peerConnection) {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(event.data));
+                        }
+                        // --- FIN LÓGICA DE VIDEO ---
+
+                        // Evento de Pantalla Compartida
+                        else if(event.type === 'SCREEN_SHARE_STARTED') {
+                            const chat = document.getElementById('chatWindow');
+                            chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 El presentador comparte pantalla. ¡Clic para ampliar!</div></div>`;
                         }
                     });
+
+                    // Si soy un invitado, le aviso a la sala que acabo de llegar
+                    if(!isHost) {
+                        setTimeout(() => NetworkAPI.broadcastEvent('GUEST_JOINED'), 1500);
+                    }
                 },
                 
-                // ENVIAR: Función para subir datos a Firebase
                 broadcastEvent: (type, data) => {
-                    if(!roomRef) return; // Si no hay sala conectada, no hacemos nada
-                    roomRef.push({
-                        type: type,
-                        data: data || {},
-                        senderId: localUserId,
-                        timestamp: firebase.database.ServerValue.TIMESTAMP
-                    });
+                    if(!roomRef) return;
+                    roomRef.push({ type: type, data: data || {}, senderId: localUserId, timestamp: firebase.database.ServerValue.TIMESTAMP });
                 },
 
-                // (Mantenemos esta por compatibilidad con los subtítulos locales por ahora)
-                broadcastSubtitle: (userName, text) => {
-                    SpeechAPI.displaySubtitle(userName, text);
-                }
+                broadcastSubtitle: (userName, text) => { SpeechAPI.displaySubtitle(userName, text); }
             };
         })();
 
