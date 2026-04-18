@@ -931,58 +931,80 @@
         })();
 
         /**
-         * 5. API DE ARCHIVOS (DRAG & DROP)
-         */
-        /**
-         * 5. API DE ARCHIVOS (DRAG & DROP + CLICK)
+         * 5. API DE ARCHIVOS (P2P WEBRTC DIRECTO)
          */
         const FileAPI = (() => {
             const dz = document.getElementById('fileDropzone');
             const list = document.getElementById('fileList');
             const chat = document.getElementById('chatWindow');
-            const fileInput = document.getElementById('fileInput'); // <-- NUEVO
+            const fileInput = document.getElementById('fileInput');
 
-            // Centralizamos la lógica de procesar un archivo para usarla en ambos métodos
+            // Cuando TÚ envías un archivo
             const processFile = (file) => {
                 const size = (file.size / 1024 / 1024).toFixed(2);
-                
-                // Agregar a la lista lateral
-                list.innerHTML += `<div class="file-item"><span>📄</span> <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${file.name}</div> <span style="font-size:0.8rem; color:var(--text-muted);">${size}MB</span></div>`;
-                
-                // Notificar en el chat
                 const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
+                
+                // Mostrar localmente
+                list.innerHTML += `<div class="file-item"><span>📄</span> <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${file.name}</div> <span style="font-size:0.8rem; color:var(--text-muted);">${size}MB</span></div>`;
                 chat.innerHTML += `
                     <div class="msg self">
                         <div class="msg-header"><span>Tú compartiste un archivo</span><span>${time}</span></div>
                         <div class="msg-bubble" style="background:var(--surface-1); border:1px solid var(--neon-cyan); display:flex; align-items:center; gap:10px;">
-                            <span style="font-size:1.5rem">📄</span> <b>${file.name}</b>
+                            <span style="font-size:1.5rem">📤</span> <b>${file.name}</b> (Enviando...)
                         </div>
                     </div>`;
                 chat.scrollTop = chat.scrollHeight;
+
+                // INICIAR TRANSFERENCIA P2P
+                NetworkAPI.sendFileP2P(file);
             };
 
-            // Eventos de arrastrar y soltar (se mantienen igual)
             dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('drag-over'); };
             dz.ondragleave = () => dz.classList.remove('drag-over');
             dz.ondrop = (e) => {
                 e.preventDefault(); dz.classList.remove('drag-over');
-                if(e.dataTransfer.files.length > 0) {
-                    processFile(e.dataTransfer.files[0]);
-                }
+                if(e.dataTransfer.files.length > 0) processFile(e.dataTransfer.files[0]);
             };
 
-            // NUEVO: Escuchador para la selección desde el explorador de archivos
             if(fileInput) {
                 fileInput.addEventListener('change', (e) => {
                     if(e.target.files.length > 0) {
                         processFile(e.target.files[0]);
-                        // Limpiamos el valor para que permita subir el mismo archivo otra vez si se borra
                         e.target.value = ''; 
                     }
                 });
             }
 
-            return {};
+            return {
+                // Cuando TÚ RECIBES un archivo de la otra persona
+                receiveFile: (meta, blobUrl) => {
+                    const size = (meta.size / 1024 / 1024).toFixed(2);
+                    const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
+                    
+                    if(typeof AudioAPI !== 'undefined') AudioAPI.playPop();
+
+                    // Mostrar en el panel lateral con botón de descarga
+                    list.innerHTML += `
+                        <div class="file-item">
+                            <span>📄</span> 
+                            <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${meta.name}</div> 
+                            <a href="${blobUrl}" download="${meta.name}" style="background:var(--neon-purple); color:white; padding:4px 8px; border-radius:4px; text-decoration:none; font-size:0.8rem;">Descargar</a>
+                        </div>`;
+                        
+                    // Mostrar en el chat con botón de descarga
+                    chat.innerHTML += `
+                        <div class="msg">
+                            <div class="msg-header"><span>${meta.sender} te envió un archivo</span><span>${time}</span></div>
+                            <div class="msg-bubble" style="background:var(--surface-2); border:1px solid var(--neon-purple); display:flex; flex-direction:column; gap:10px;">
+                                <div style="display:flex; align-items:center; gap:10px;">
+                                    <span style="font-size:1.5rem">📥</span> <b>${meta.name}</b> (${size}MB)
+                                </div>
+                                <a href="${blobUrl}" download="${meta.name}" style="background:var(--neon-purple); color:white; padding:8px; border-radius:6px; text-decoration:none; text-align:center; font-weight:bold; width:100%;">↓ Descargar Archivo</a>
+                            </div>
+                        </div>`;
+                    chat.scrollTop = chat.scrollHeight;
+                }
+            };
         })();
 
         /**
@@ -1042,16 +1064,56 @@
             let roomRef = null;
             const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
             
-            // --- NUEVO: MOTOR WEBRTC PARA VIDEO REAL ---
             let peerConnection = null;
             let remoteStream = null;
-            const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }; // El GPS de Internet
+            let dataChannel = null; // <-- NUEVO: El tubo para archivos
+            const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }; 
+
+            // Variables para rearmar el archivo que llega en pedacitos
+            let receivedBuffers = [];
+            let receivingFileMeta = null;
+
+            // Configurar el tubo P2P
+            const setupDataChannel = (channel) => {
+                channel.binaryType = 'arraybuffer';
+                channel.onmessage = (event) => {
+                    if (typeof event.data === 'string') {
+                        // Recibimos instrucciones (metadatos)
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === 'FILE_META') {
+                            receivingFileMeta = msg.meta;
+                            receivedBuffers = []; // Limpiamos la memoria
+                        } else if (msg.type === 'FILE_END') {
+                            // Terminó de llegar. ¡Armamos el archivo!
+                            const blob = new Blob(receivedBuffers);
+                            const url = URL.createObjectURL(blob);
+                            FileAPI.receiveFile(receivingFileMeta, url); // Lo mandamos a la interfaz
+                            receivingFileMeta = null;
+                            receivedBuffers = [];
+                        }
+                    } else {
+                        // Recibimos un trozo de archivo binario
+                        receivedBuffers.push(event.data);
+                    }
+                };
+            };
 
             const setupWebRTC = async (isInitiator) => {
                 peerConnection = new RTCPeerConnection(servers);
                 remoteStream = new MediaStream();
 
-                // 1. Crear la tarjeta de video REAL para el invitado
+                // --- NUEVO: CREAR EL CANAL DE DATOS P2P ---
+                if (isInitiator) {
+                    dataChannel = peerConnection.createDataChannel('nexus-file-transfer');
+                    setupDataChannel(dataChannel);
+                } else {
+                    peerConnection.ondatachannel = (event) => {
+                        dataChannel = event.channel;
+                        setupDataChannel(dataChannel);
+                    };
+                }
+                // ------------------------------------------
+
                 const grid = document.getElementById('mainGrid');
                 if(!document.getElementById('card-remote')) {
                     const card = document.createElement('div');
@@ -1070,25 +1132,21 @@
                 }
                 document.getElementById('videoRemote').srcObject = remoteStream;
 
-                // 2. Enviar nuestra cámara y micrófono al tubo
                 const localStream = MediaAPI.getLocalStream();
                 if(localStream) {
                     localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
                 }
 
-                // 3. Recibir la cámara y micrófono del invitado
                 peerConnection.ontrack = (event) => {
                     event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
                 };
 
-                // 4. Sincronizar conexiones de internet (Candidatos ICE)
                 peerConnection.onicecandidate = (event) => {
                     if(event.candidate) {
                         NetworkAPI.broadcastEvent('ICE', event.candidate.toJSON());
                     }
                 };
 
-                // 5. Si somos el Host, iniciamos la "Oferta" de llamada
                 if(isInitiator) {
                     const offer = await peerConnection.createOffer();
                     await peerConnection.setLocalDescription(offer);
@@ -1097,6 +1155,44 @@
             };
 
             return {
+                // --- AÑADE ESTA FUNCIÓN NUEVA ---
+                sendFileP2P: (file) => {
+                    if (!dataChannel || dataChannel.readyState !== 'open') {
+                        alert("Esperando a que la otra persona se conecte completamente...");
+                        return;
+                    }
+                    
+                    const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
+
+                    // 1. Avisar qué archivo va a llegar
+                    dataChannel.send(JSON.stringify({
+                        type: 'FILE_META',
+                        meta: { name: file.name, size: file.size, type: file.type, sender: myName }
+                    }));
+
+                    // 2. Picar el archivo en pedacitos de 16KB y enviarlo
+                    const chunkSize = 16384; 
+                    const reader = new FileReader();
+                    let offset = 0;
+
+                    reader.onload = (e) => {
+                        dataChannel.send(e.target.result); // Envía el trozo
+                        offset += e.target.result.byteLength;
+                        if (offset < file.size) {
+                            readSlice(offset); // Lee el siguiente trozo
+                        } else {
+                            // 3. Avisar que terminamos
+                            dataChannel.send(JSON.stringify({ type: 'FILE_END' }));
+                        }
+                    };
+
+                    const readSlice = (o) => {
+                        const slice = file.slice(offset, o + chunkSize);
+                        reader.readAsArrayBuffer(slice);
+                    };
+                    
+                    readSlice(0); // Inicia el proceso
+                },
                 initRoom: (roomId, isHost) => {
                     roomRef = database.ref('rooms/' + roomId + '/events');
                     
