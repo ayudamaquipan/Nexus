@@ -473,6 +473,14 @@
             .sidebar:not(.hidden) {
                 z-index: 9999 !important;
             }
+            .sidebar {
+                padding-top: env(safe-area-inset-top); /* Soporte para el notch de iPhone */
+                display: flex;
+                flex-direction: column;
+            }
+            .sidebar-content {
+                height: calc(100vh - 120px); /* Ajusta el alto para que el input del chat no se pierda */
+            }
         }
     </style>
 </head>
@@ -574,7 +582,7 @@
                     </div>
 
                     <div class="dock-divider"></div>
-                    <button class="btn-dock" data-tooltip="Ocultar Panel" onclick="UIAPI.toggleSidebar(this)">🗂️</button>
+                    <button class="btn-dock" id="btnSidebarToggle" data-tooltip="Ocultar Panel" onclick="UIAPI.toggleSidebar(this)">🗂️</button>
                     <button class="btn-dock danger" data-tooltip="Salir de la llamada" onclick="ExitAPI.leaveCall()">📞</button>
                     <button class="btn-dock btn-end" id="btnEndMeeting" data-tooltip="Terminar para todos" onclick="ExitAPI.promptEndMeeting()" style="display: none;">🛑</button>
                     <button class="btn-dock" data-tooltip="Compartir Pantalla" id="btnShare" onclick="MediaAPI.toggleScreenShare(this)">💻</button>
@@ -585,6 +593,11 @@
         </main>
 
         <aside class="sidebar hidden" id="sidebar">
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--glass-border); background: var(--surface-2);">
+                <span style="font-weight: bold; color: var(--neon-cyan); letter-spacing: 1px; font-size: 0.8rem;">OPCIONES DE REUNIÓN</span>
+                <button onclick="UIAPI.toggleSidebar(document.getElementById('btnSidebarToggle'))" 
+                        style="background: rgba(255,255,255,0.1); border: none; color: white; width: 35px; height: 35px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.2rem;">✕</button>
+            </div>
             <div class="sidebar-tabs">
                 <button class="tab-btn active" onclick="UIAPI.switchTab('panel-chat', this)">💬 Chat</button>
                 <button class="tab-btn" onclick="UIAPI.switchTab('panel-files', this)">📁 Archivos</button>
@@ -835,7 +848,11 @@
                 toggleSidebar: (btn) => {
                     const sb = document.getElementById('sidebar');
                     sb.classList.toggle('hidden');
-                    btn.classList.toggle('active-feature');
+                    // Solo toggleamos la clase si el botón existe
+                    if(btn) {
+                        btn.classList.toggle('active-feature');
+                    }
+                    if(typeof AudioAPI !== 'undefined') AudioAPI.playClick();
                 },
                 toggleTheater: (element) => {
                     const mainGrid = document.getElementById('mainGrid');
