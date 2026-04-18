@@ -41,10 +41,16 @@
            2. PANTALLA DE INICIO Y LOBBY DE ESPERA (CONTROL DE ACCESO)
            ========================================================================== */
         #startup-overlay {
-            position: fixed; inset: 0; background: var(--bg-deep); z-index: 2000;
-            display: flex; align-items: center; justify-content: center;
-            transition: opacity 0.5s ease; backdrop-filter: blur(20px);
-        }
+    position: fixed; 
+    inset: 0; 
+    background: var(--bg-deep); 
+    z-index: 5000; /* Aumentamos a 5000 para que tape al sidebar */
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    transition: opacity 0.5s ease; 
+    backdrop-filter: blur(20px);
+}
         .lobby-container {
             display: flex; gap: 40px; background: var(--glass-bg); padding: 40px;
             border-radius: var(--radius-lg); border: 1px solid var(--glass-border);
@@ -505,12 +511,12 @@
 
     <header>
         <div class="header-info">
-            <div class="brand-title" style="font-size: 1.5rem;">NEXUS</div>
-            <div class="room-code-display" style="display: flex; align-items: center; gap: 10px;">
-                <span id="display-room-code">SALA: Generando...</span>
-                <button onclick="ShareAPI.copyOrShare()" style="background:var(--neon-cyan); border:none; border-radius:4px; padding:4px 10px; cursor:pointer; font-size:0.7rem; color:black; font-weight:bold; letter-spacing:1px;">COMPARTIR</button>
-            </div>
-        </div>
+    <div class="brand-title" style="font-size: 1.5rem;">NEXUS</div>
+    <div class="room-code-display" style="display: flex; align-items: center; gap: 10px;">
+        <span id="display-room-code">SALA: Generando...</span>
+        <button onclick="ShareAPI.copyOrShare()" style="background:var(--neon-cyan); border:none; border-radius:4px; padding:4px 10px; cursor:pointer; font-size:0.7rem; color:black; font-weight:bold; letter-spacing:1px;">COMPARTIR</button>
+    </div>
+</div>
         <div class="time-badge" id="reloj">00:00:00</div>
     </header>
 
@@ -578,7 +584,7 @@
             </div>
         </main>
 
-        <aside class="sidebar" id="sidebar">
+        <aside class="sidebar hidden" id="sidebar">
             <div class="sidebar-tabs">
                 <button class="tab-btn active" onclick="UIAPI.switchTab('panel-chat', this)">💬 Chat</button>
                 <button class="tab-btn" onclick="UIAPI.switchTab('panel-files', this)">📁 Archivos</button>
@@ -880,7 +886,7 @@
         })();
 
         /**
-         * 4. API DE CHAT Y BOT SIMULADO
+         * 4. API DE CHAT (CONECTADO A FIREBASE)
          */
         const ChatAPI = (() => {
             const windowEl = document.getElementById('chatWindow');
@@ -903,18 +909,23 @@
                 send: () => {
                     const txt = input.value.trim();
                     if(!txt) return;
+                    
+                    // 1. Lo mostramos en nuestra pantalla
                     addMsg(txt, true, "Tú");
                     input.value = '';
+                    AudioAPI.playPop(); 
                     
-                    AudioAPI.playPop(); // <-- NUEVO: Suena al enviar tu mensaje
+                    // 2. Extraemos nuestro nombre sin los emojis
+                    const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
                     
-                    // Bot de respuesta simulado
-                    if(txt.toLowerCase().includes('hola')) {
-                        setTimeout(() => {
-                            addMsg("¡Hola! ¿Cómo estás?", false, "Invitado Externo");
-                            AudioAPI.playPop(); // <-- NUEVO: Suena al recibir mensaje
-                        }, 1500);
-                    }
+                    // 3. Lo enviamos a la red para que los demás lo vean
+                    NetworkAPI.broadcastEvent('CHAT_MESSAGE', { sender: myName, text: txt });
+                },
+                
+                // Función que llamará Firebase cuando llegue un mensaje de otro
+                receive: (senderName, text) => {
+                    addMsg(text, false, senderName);
+                    AudioAPI.playPop();
                 }
             };
         })();
@@ -1118,6 +1129,18 @@
                             const chat = document.getElementById('chatWindow');
                             chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 El presentador comparte pantalla. ¡Clic para ampliar!</div></div>`;
                         }
+                        
+                        // --- AÑADE ESTAS LÍNEAS AQUÍ ---
+                        // Evento de Chat Real
+                        else if(event.type === 'CHAT_MESSAGE') {
+                            // Si llega un mensaje, lo mandamos a la interfaz del chat
+                            ChatAPI.receive(event.data.sender, event.data.text);
+                        }
+                        // Evento de Subtítulos Reales
+                        else if(event.type === 'SUBTITLE') {
+                            SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
+                        }
+                        // ------------------------------
                     });
 
                     // Si soy un invitado, le aviso a la sala que acabo de llegar
@@ -1131,7 +1154,12 @@
                     roomRef.push({ type: type, data: data || {}, senderId: localUserId, timestamp: firebase.database.ServerValue.TIMESTAMP });
                 },
 
-                broadcastSubtitle: (userName, text) => { SpeechAPI.displaySubtitle(userName, text); }
+                broadcastSubtitle: (userName, text) => {
+    // Lo muestro en mi PC
+    SpeechAPI.displaySubtitle(userName, text); 
+    // Lo envío a Firebase para el resto
+    if(roomRef) roomRef.push({ type: 'SUBTITLE', data: { userName: userName, text: text }, senderId: localUserId });
+}
             };
         })();
 
@@ -1460,30 +1488,25 @@ const ReactionAPI = (() => {
         /**
          * 14. API DE COMPARTIR (NATIVO MÓVIL)
          */
-        const ShareAPI = (() => {
-            return {
-                copyOrShare: async () => {
-                    const code = document.getElementById('display-room-code').innerText.replace('SALA: ', '');
-                    // Creamos un link que al abrirlo ya traiga el código (opcional)
-                    const url = window.location.href.split('?')[0];
-                    const text = `¡Únete a mi reunión en NEXUS!\nCódigo: ${code}\nLink: ${url}`;
+        
+         const ShareAPI = (() => {
+    return {
+        copyOrShare: async () => {
+            const code = document.getElementById('display-room-code').innerText.replace('SALA: ', '');
+            const url = window.location.href.split('?')[0];
+            const text = `¡Únete a mi reunión en NEXUS!\nCódigo: ${code}\nLink: ${url}`;
 
-                    if (navigator.share) {
-                        try {
-                            await navigator.share({
-                                title: 'Invitación Nexus',
-                                text: text,
-                                url: url
-                            });
-                        } catch (err) { /* Cancelado por usuario */ }
-                    } else {
-                        // Fallback para PC si no hay menú de compartir
-                        navigator.clipboard.writeText(text);
-                        alert("Código y link copiados al portapapeles 📋");
-                    }
-                }
-            };
-        })();
+            if (navigator.share) {
+                try {
+                    await navigator.share({ title: 'Invitación Nexus', text: text, url: url });
+                } catch (err) { /* Cancelado */ }
+            } else {
+                navigator.clipboard.writeText(text);
+                alert("Código y link copiados al portapapeles 📋");
+            }
+        }
+    };
+})();
         // Inicializar aplicación
         window.onload = CoreApp.init;
 
