@@ -378,6 +378,86 @@
     border: none;
     border-radius: 0;
 }
+/* ==========================================================================
+           13. ADAPTACIÓN PARA DISPOSITIVOS MÓVILES (RESPONSIVE)
+           ========================================================================== */
+        @media (max-width: 768px) {
+            /* 1. Ajustar el Lobby (Pantalla de inicio) */
+            .lobby-container {
+                flex-direction: column;
+                padding: 20px;
+                gap: 20px;
+                max-height: 95vh;
+                overflow-y: auto;
+            }
+            .brand-title { font-size: 2rem; }
+
+            /* 2. Reducir el tamaño del Header */
+            header {
+                padding: 0 15px;
+                height: 60px;
+            }
+            .header-info .brand-title { font-size: 1.2rem !important; }
+            .time-badge { font-size: 0.9rem; padding: 5px 10px; }
+            .app-body { height: calc(100vh - 60px); }
+
+            /* 3. Ajustar el Espacio de Trabajo y Videos */
+            .workspace {
+                width: 100% !important;
+                padding: 10px;
+                padding-bottom: 90px; /* Deja espacio para que el dock no tape el video */
+            }
+            .video-grid {
+                grid-template-columns: 1fr; /* 1 sola columna de video hacia abajo */
+            }
+
+            /* 4. El Panel Lateral (Chat/Usuarios) ocupa toda la pantalla */
+            .sidebar {
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 2000;
+                margin-right: 0 !important;
+            }
+            .sidebar.hidden {
+                transform: translateX(100%);
+            }
+
+            /* 5. El Dock inferior (ahora deslizable horizontalmente) */
+            .dock-wrapper {
+                width: 100% !important;
+                bottom: 10px;
+                padding: 0 10px;
+            }
+            .dock-container {
+                width: 100%;
+                padding: 10px;
+                gap: 8px;
+                justify-content: flex-start;
+                overflow-x: auto; /* Permite deslizar los botones con el dedo */
+            }
+            /* Ocultar la barra de scroll fea del dock en celulares */
+            .dock-container::-webkit-scrollbar { display: none; }
+            
+            .btn-dock {
+                width: 45px;
+                height: 45px;
+                font-size: 1.1rem;
+                flex-shrink: 0; /* Evita que los botones se aplasten */
+            }
+
+            /* 6. Ajustar Modales y Pizarra */
+            .modal-content {
+                width: 90%;
+                padding: 20px;
+            }
+            .wb-tools {
+                flex-wrap: wrap; /* Si hay muchos botones en la pizarra, los pone en dos líneas */
+                justify-content: center;
+            }
+        }
     </style>
 </head>
 <body>
