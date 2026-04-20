@@ -606,16 +606,26 @@
             </div>
 
             <div class="sidebar-content active" id="panel-chat">
-                <div class="chat-messages" id="chatWindow">
-                    <div style="text-align:center; color:var(--text-muted); font-size:0.8rem; margin-bottom:15px;">
-                        Bienvenido al chat de la sala
-                    </div>
-                </div>
-                <div class="chat-input-area">
-                    <input type="text" id="chatInput" placeholder="Escribe a todos..." autocomplete="off">
-                    <button onclick="ChatAPI.send()">➤</button>
-                </div>
+    <div id="inner-chat-tabs" style="display: flex; gap: 8px; overflow-x: auto; margin-bottom: 10px; padding-bottom: 5px; scrollbar-width: none;">
+        <button id="btn-chat-sala" class="inner-tab active" onclick="ChatAPI.switchChat('sala')" style="background: var(--neon-cyan); color: black; border: none; padding: 5px 12px; border-radius: 15px; font-size: 0.8rem; font-weight: bold; cursor: pointer; white-space: nowrap; transition: 0.2s;">🌐 Sala General</button>
+    </div>
+
+    <div id="chat-windows-container" style="flex-grow: 1; overflow: hidden; display: flex; flex-direction: column; position: relative;">
+        <div class="chat-messages" id="chat-sala" style="display: flex; height: 100%;">
+            <div style="text-align:center; color:var(--text-muted); font-size:0.8rem; margin-bottom:15px; width: 100%;">
+                Bienvenido al chat de la sala
             </div>
+        </div>
+    </div>
+<div id="typing-indicator" style="font-size: 0.75rem; color: var(--neon-cyan); min-height: 15px; margin-bottom: 5px; font-style: italic; opacity: 0; transition: 0.3s; padding-left: 10px;">
+        Alguien está escribiendo...
+    </div>
+
+    <div class="chat-input-area">
+        <input type="text" id="chatInput" placeholder="Escribe a todos..." autocomplete="off">
+        <button onclick="ChatAPI.send()">➤</button>
+    </div>
+</div>
 
             <div class="sidebar-content" id="panel-files">
                 <div class="file-dropzone" id="fileDropzone" style="cursor: pointer;" onclick="document.getElementById('fileInput').click()">
@@ -906,73 +916,182 @@
          * 4. API DE CHAT (CONECTADO A FIREBASE)
          */
         const ChatAPI = (() => {
-            const windowEl = document.getElementById('chatWindow');
-            const input = document.getElementById('chatInput');
+    const container = document.getElementById('chat-windows-container');
+    const innerTabs = document.getElementById('inner-chat-tabs');
+    const input = document.getElementById('chatInput');
+    
+    let currentChat = 'sala'; // Puede ser 'sala' o el nombre de un usuario
+    let unreadCounts = {}; // Para llevar el conteo de mensajes no leídos
 
-            const addMsg = (text, isSelf = false, sender = "Sistema") => {
-                const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
-                windowEl.innerHTML += `
-                    <div class="msg ${isSelf ? 'self' : ''}">
-                        <div class="msg-header"><span>${sender}</span><span>${time}</span></div>
-                        <div class="msg-bubble">${text}</div>
-                    </div>
-                `;
-                windowEl.scrollTop = windowEl.scrollHeight;
-            };
+    // Función que crea una pestaña y ventana para un usuario si no existe
+    const ensureChatWindowExists = (targetName) => {
+        if(document.getElementById(`chat-${targetName}`)) return; // Ya existe
 
-            input.addEventListener('keypress', (e) => { if(e.key === 'Enter') ChatAPI.send(); });
+        // 1. Crear el botoncito en la parte superior
+        const tab = document.createElement('button');
+        tab.id = `btn-chat-${targetName}`;
+        tab.className = 'inner-tab';
+        // Incluye un "badge" (burbuja) para notificaciones
+        tab.innerHTML = `🔒 ${targetName} <span class="badge" style="display:none; background:var(--neon-red); color:white; border-radius:50%; padding:2px 6px; font-size:0.7rem; margin-left:5px;">0</span>`;
+        tab.style.cssText = "background: rgba(255,255,255,0.1); color: white; border: none; padding: 5px 12px; border-radius: 15px; font-size: 0.8rem; cursor: pointer; white-space: nowrap; transition: 0.2s;";
+        tab.onclick = () => ChatAPI.switchChat(targetName);
+        innerTabs.appendChild(tab);
 
-            return {
-                send: () => {
-    const txt = input.value.trim();
-    if(!txt) return;
+        // 2. Crear la ventana invisible donde irán sus mensajes
+        const windowEl = document.createElement('div');
+        windowEl.id = `chat-${targetName}`;
+        windowEl.className = 'chat-messages';
+        windowEl.style.cssText = 'display: none; height: 100%;'; 
+        windowEl.innerHTML = `<div style="text-align:center; color:var(--neon-purple); font-size:0.8rem; margin-bottom:15px; width: 100%;">Inicio del chat privado con ${targetName}</div>`;
+        container.appendChild(windowEl);
+        
+        unreadCounts[targetName] = 0;
+    };
 
-    let isPrivate = false;
-    let targetName = null;
-    let messageText = txt;
+    // Función interna para inyectar el mensaje visualmente
+    const addMsg = (text, isSelf = false, sender = "Sistema", targetWindow = 'sala') => {
+        const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
+        const win = document.getElementById(`chat-${targetWindow}`);
+        if(!win) return;
 
-    // Detectar si es un mensaje privado: /privado "Nombre" : mensaje
-    if (txt.startsWith('/privado')) {
-        const match = txt.match(/^\/privado\s+"([^"]+)"\s*:\s*(.*)$/);
-        if (match) {
-            isPrivate = true;
-            targetName = match[1];
-            messageText = match[2];
-            if(!messageText) return; // No enviar si está vacío
+        win.innerHTML += `
+            <div class="msg ${isSelf ? 'self' : ''}">
+                <div class="msg-header"><span>${sender}</span><span>${time}</span></div>
+                <div class="msg-bubble" style="${targetWindow !== 'sala' ? 'border-color: var(--neon-purple);' : ''}">${text}</div>
+            </div>
+        `;
+        win.scrollTop = win.scrollHeight;
+        
+        // --- SISTEMA DE NOTIFICACIONES ---
+        // Si el mensaje es para otra ventana que no estamos viendo, sumamos una notificación
+        if(currentChat !== targetWindow && !isSelf) {
+            unreadCounts[targetWindow]++;
+            const badge = document.querySelector(`#btn-chat-${targetWindow} .badge`);
+            if(badge) {
+                badge.innerText = unreadCounts[targetWindow];
+                badge.style.display = 'inline-block';
+            }
         }
-    }
+    };
 
-    const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
-    
-    // 1. Lo mostramos en nuestra pantalla
-    if (isPrivate) {
-        addMsg(`<span style="color: var(--neon-purple);">🔒 Privado para ${targetName}:</span><br>${messageText}`, true, "Tú");
-    } else {
-        addMsg(messageText, true, "Tú");
-    }
-    
-    input.value = '';
-    AudioAPI.playPop(); 
-    
-    // 2. Lo enviamos a la red (Firebase)
-    NetworkAPI.broadcastEvent('CHAT_MESSAGE', { 
-        sender: myName, 
-        text: messageText,
-        isPrivate: isPrivate,
-        target: targetName 
+// --- LÓGICA DE ESCRIBIENDO ---
+    let isTyping = false;
+    let typingTimer = null;
+
+    input.addEventListener('input', () => {
+        const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
+        
+        // Si no estábamos escribiendo y empezamos a escribir
+        if (!isTyping && input.value.trim().length > 0) {
+            isTyping = true;
+            NetworkAPI.broadcastEvent('TYPING', { sender: myName, target: currentChat, isPrivate: currentChat !== 'sala' });
+        }
+        
+        // Reiniciar el temporizador cada vez que presionamos una tecla
+        clearTimeout(typingTimer);
+        
+        // Si dejamos de teclear por 1.5 segundos, enviamos señal de parar
+        typingTimer = setTimeout(() => {
+            if (isTyping) {
+                isTyping = false;
+                NetworkAPI.broadcastEvent('STOP_TYPING', { sender: myName, target: currentChat, isPrivate: currentChat !== 'sala' });
+            }
+        }, 1500);
     });
-},
 
-receive: (senderName, text, isPrivate = false) => {
-    if (isPrivate) {
-        addMsg(`<span style="color: var(--neon-purple);">🔒 Privado de ${senderName}:</span><br>${text}`, false, senderName);
-    } else {
-        addMsg(text, false, senderName);
-    }
-    AudioAPI.playPop();
-}
-            };
-        })();
+    input.addEventListener('keypress', (e) => { 
+        if(e.key === 'Enter') {
+            ChatAPI.send(); 
+            // Apagar forzosamente el "escribiendo" si enviamos con Enter
+            clearTimeout(typingTimer);
+            if(isTyping) {
+                isTyping = false;
+                const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
+                NetworkAPI.broadcastEvent('STOP_TYPING', { sender: myName, target: currentChat, isPrivate: currentChat !== 'sala' });
+            }
+        }
+    });
+    return {
+        // Cambia la vista entre las diferentes pestañas de chat
+        switchChat: (targetName) => {
+            currentChat = targetName;
+            
+            // Cambiar los colores de los botones
+            document.querySelectorAll('.inner-tab').forEach(btn => {
+                btn.style.background = 'rgba(255,255,255,0.1)';
+                btn.style.color = 'white';
+            });
+            const activeBtn = document.getElementById(`btn-chat-${targetName}`);
+            activeBtn.style.background = targetName === 'sala' ? 'var(--neon-cyan)' : 'var(--neon-purple)';
+            activeBtn.style.color = targetName === 'sala' ? 'black' : 'white';
+            
+            // Limpiar notificaciones si las había
+            if(targetName !== 'sala') {
+                unreadCounts[targetName] = 0;
+                activeBtn.querySelector('.badge').style.display = 'none';
+            }
+
+            // Ocultar todas las ventanas y mostrar la correcta
+            document.querySelectorAll('#chat-windows-container .chat-messages').forEach(win => win.style.display = 'none');
+            const activeWin = document.getElementById(`chat-${targetName}`);
+            activeWin.style.display = 'flex';
+            activeWin.scrollTop = activeWin.scrollHeight;
+
+            // Cambiar el texto explicativo del input
+            input.placeholder = targetName === 'sala' ? "Escribe a todos..." : `Mensaje privado para ${targetName}...`;
+            input.focus();
+        },
+
+        // El menú contextual llama a esto para forzar abrir un chat con alguien
+        openPrivateChat: (targetName) => {
+            ensureChatWindowExists(targetName);
+            ChatAPI.switchChat(targetName);
+        },
+
+        send: () => {
+            const txt = input.value.trim();
+            if(!txt) return;
+
+            const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
+            
+            // Revisamos en qué pestaña estamos parados para saber cómo enviarlo
+            if (currentChat === 'sala') {
+                addMsg(txt, true, "Tú", 'sala');
+                NetworkAPI.broadcastEvent('CHAT_MESSAGE', { sender: myName, text: txt, isPrivate: false });
+            } else {
+                addMsg(txt, true, "Tú", currentChat); // Lo mostramos en la ventana privada
+                NetworkAPI.broadcastEvent('CHAT_MESSAGE', { sender: myName, text: txt, isPrivate: true, target: currentChat });
+            }
+            
+            input.value = '';
+            AudioAPI.playPop(); 
+        },
+        
+        receive: (senderName, text, isPrivate = false) => {
+            if (isPrivate) {
+                ensureChatWindowExists(senderName); // Crea la pestaña automáticamente si no existe
+                addMsg(text, false, senderName, senderName); // Lo rutea a la pestaña del usuario
+            } else {
+                addMsg(text, false, senderName, 'sala'); // Lo rutea a la sala general
+            }
+            AudioAPI.playPop();
+        },
+        showTyping: (senderName) => {
+            const ind = document.getElementById('typing-indicator');
+            if (ind) {
+                ind.innerText = `✍️ ${senderName} está escribiendo...`;
+                ind.style.opacity = '1';
+            }
+        },
+
+        hideTyping: () => {
+            const ind = document.getElementById('typing-indicator');
+            if (ind) {
+                ind.style.opacity = '0';
+            }
+        }
+    };
+})();
 
         /**
          * 5. API DE ARCHIVOS (P2P WEBRTC DIRECTO)
@@ -985,40 +1104,38 @@ receive: (senderName, text, isPrivate = false) => {
 
             // Cuando TÚ envías un archivo
             const processFile = (file) => {
-                const size = (file.size / 1024 / 1024).toFixed(2);
-                const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
-                
-                // Mostrar localmente
-                list.innerHTML += `<div class="file-item"><span>📄</span> <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${file.name}</div> <span style="font-size:0.8rem; color:var(--text-muted);">${size}MB</span></div>`;
-                chat.innerHTML += `
-                    <div class="msg self">
-                        <div class="msg-header"><span>Tú compartiste un archivo</span><span>${time}</span></div>
-                        <div class="msg-bubble" style="background:var(--surface-1); border:1px solid var(--neon-cyan); display:flex; align-items:center; gap:10px;">
-                            <span style="font-size:1.5rem">📤</span> <b>${file.name}</b> (Enviando...)
-                        </div>
-                    </div>`;
-                chat.scrollTop = chat.scrollHeight;
+    const size = (file.size / 1024 / 1024).toFixed(2);
+    const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
+    const fileId = 'file-upload-' + Date.now(); // Identificador único
+    
+    // Mostrar localmente en la lista
+    list.innerHTML += `<div class="file-item"><span>📄</span> <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${file.name}</div> <span style="font-size:0.8rem; color:var(--text-muted);">${size}MB</span></div>`;
+    
+    // Mostrar en el chat con estado dinámico
+    chat.innerHTML += `
+        <div class="msg self">
+            <div class="msg-header"><span>Tú compartiste un archivo</span><span>${time}</span></div>
+            <div class="msg-bubble" id="${fileId}" style="background:var(--surface-1); border:1px solid var(--neon-cyan); display:flex; align-items:center; gap:10px; transition: 0.3s;">
+                <span style="font-size:1.5rem">📤</span> <b>${file.name}</b> <span class="upload-status" style="color: var(--neon-cyan); font-weight: bold;">(Calculando...)</span>
+            </div>
+        </div>`;
+    chat.scrollTop = chat.scrollHeight;
 
-                // INICIAR TRANSFERENCIA P2P
-                NetworkAPI.sendFileP2P(file);
-            };
-
-            dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('drag-over'); };
-            dz.ondragleave = () => dz.classList.remove('drag-over');
-            dz.ondrop = (e) => {
-                e.preventDefault(); dz.classList.remove('drag-over');
-                if(e.dataTransfer.files.length > 0) processFile(e.dataTransfer.files[0]);
-            };
-
-            if(fileInput) {
-                fileInput.addEventListener('change', (e) => {
-                    if(e.target.files.length > 0) {
-                        processFile(e.target.files[0]);
-                        e.target.value = ''; 
-                    }
-                });
+    // INICIAR TRANSFERENCIA P2P pasando una función que actualiza el progreso
+    NetworkAPI.sendFileP2P(file, (progress) => {
+        const bubble = document.getElementById(fileId);
+        if(bubble) {
+            const statusEl = bubble.querySelector('.upload-status');
+            if(progress >= 100) {
+                statusEl.innerText = '(Enviado ✅)';
+                statusEl.style.color = 'var(--neon-green)';
+                bubble.style.borderColor = 'var(--neon-green)';
+            } else {
+                statusEl.innerText = `(${progress}%)`;
             }
-
+        }
+    });
+};
             return {
                 // Cuando TÚ RECIBES un archivo de la otra persona
                 receiveFile: (meta, blobUrl) => {
@@ -1156,16 +1273,19 @@ receive: (senderName, text, isPrivate = false) => {
                 let dataChannel = null;
 
                 if (isInitiator) {
-                    dataChannel = pc.createDataChannel('nexus-data');
-                    setupDataChannel(dataChannel);
-                } else {
-                    pc.ondatachannel = (event) => {
-                        dataChannel = event.channel;
-                        setupDataChannel(dataChannel);
-                    };
-                }
-
-                peers[remoteUserId] = { pc, channel: dataChannel };
+    dataChannel = pc.createDataChannel('nexus-data');
+    setupDataChannel(dataChannel);
+} else {
+    pc.ondatachannel = (event) => {
+        dataChannel = event.channel;
+        setupDataChannel(dataChannel);
+        // NUEVO: Guardar el canal en el diccionario para que el invitado pueda responder con archivos
+        if (peers[remoteUserId]) {
+            peers[remoteUserId].channel = dataChannel;
+        }
+    };
+}
+peers[remoteUserId] = { pc, channel: dataChannel };
 
                 pc.oniceconnectionstatechange = () => {
                     const state = pc.iceConnectionState;
@@ -1242,7 +1362,48 @@ receive: (senderName, text, isPrivate = false) => {
             return {
                 initRoom: (roomId, isHost) => {
                     roomRef = database.ref('rooms/' + roomId + '/events');
-                    
+                    // --- SISTEMA DE PRESENCIA (NUEVO) ---
+                    const presenceRef = database.ref('rooms/' + roomId + '/presence');
+                    const myPresenceRef = presenceRef.child(localUserId);
+                    const connectedRef = database.ref('.info/connected');
+
+                    // Cuando Firebase detecta que estamos conectados a internet
+                    connectedRef.on('value', (snap) => {
+                        if (snap.val() === true) {
+                            // Instrucción vital: "Si me desconecto, bórreme de esta lista"
+                            myPresenceRef.onDisconnect().remove();
+                            // Agregarnos a la lista de activos
+                            myPresenceRef.set({ name: getMyName() });
+                        }
+                    });
+
+                    // Escuchar cuando alguien desaparece de la lista (cerró la pestaña)
+                    presenceRef.on('child_removed', (snapshot) => {
+                        const leftUserId = snapshot.key;
+                        const leftUserName = snapshot.val().name;
+
+                        // 1. Destruir la tarjeta de video
+                        const card = document.getElementById(`card-remote-${leftUserId}`);
+                        if(card) card.remove();
+                        
+                        // 2. Eliminarlo de la barra lateral (Panel de usuarios)
+                        const userItem = document.getElementById(`list-user-${leftUserId}`);
+                        if(userItem) userItem.remove();
+
+                        // 3. Cerrar los "tubos" de datos de WebRTC para no gastar memoria
+                        if(peers[leftUserId]) {
+                            if(peers[leftUserId].pc) peers[leftUserId].pc.close();
+                            delete peers[leftUserId];
+                        }
+
+                        // 4. Avisar sutilmente en el chat general
+                        const chatSala = document.getElementById('chat-sala');
+                        if (chatSala) {
+                            chatSala.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:rgba(255,42,109,0.1); border-color:var(--neon-red); font-size:0.8rem; text-align:center; color: var(--text-main);">🏃 <b>${leftUserName}</b> ha abandonado la sala.</div></div>`;
+                            chatSala.scrollTop = chatSala.scrollHeight;
+                        }
+                    });
+                    // --- FIN SISTEMA DE PRESENCIA ---
                     roomRef.on('child_added', async (snapshot) => {
                         const event = snapshot.val();
                         if(event.senderId === localUserId) return; 
@@ -1293,6 +1454,17 @@ receive: (senderName, text, isPrivate = false) => {
         ChatAPI.receive(event.data.sender, event.data.text, false);
     }
     break;
+    case 'TYPING':
+                                // Solo mostrar si estamos en la sala general, o si es un mensaje privado dirigido a nosotros
+                                if (!event.data.isPrivate || event.data.target === getMyName()) {
+                                    ChatAPI.showTyping(event.data.sender);
+                                }
+                                break;
+                            case 'STOP_TYPING':
+                                if (!event.data.isPrivate || event.data.target === getMyName()) {
+                                    ChatAPI.hideTyping();
+                                }
+                                break;
                             case 'SUBTITLE':
                                 SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
                                 break;
@@ -1323,41 +1495,63 @@ receive: (senderName, text, isPrivate = false) => {
                     NetworkAPI.broadcastEvent('SUBTITLE', { userName, text });
                 },
 
-                sendFileP2P: (file) => {
+                sendFileP2P: (file, progressCallback) => {
                     const myName = getMyName();
                     
-                    Object.values(peers).forEach(peer => {
+                    // Solo intentar enviar a usuarios que tengan el canal abierto
+                    const activePeers = Object.values(peers).filter(p => p.channel && p.channel.readyState === 'open');
+                    if(activePeers.length === 0) {
+                        if(progressCallback) progressCallback(100); // Si estás solo, lo da por enviado
+                        return;
+                    }
+
+                    activePeers.forEach(peer => {
                         const dc = peer.channel;
-                        if(dc && dc.readyState === 'open') {
-                            dc.send(JSON.stringify({
-                                type: 'FILE_META',
-                                meta: { name: file.name, size: file.size, type: file.type, sender: myName }
-                            }));
+                        dc.send(JSON.stringify({
+                            type: 'FILE_META',
+                            meta: { name: file.name, size: file.size, type: file.type, sender: myName }
+                        }));
 
-                            const chunkSize = 16384; 
-                            const reader = new FileReader();
-                            let offset = 0;
+                        const chunkSize = 16384; 
+                        const reader = new FileReader();
+                        let offset = 0;
 
-                            reader.onload = (e) => {
+                        const readSlice = () => {
+                            const slice = file.slice(offset, offset + chunkSize);
+                            reader.readAsArrayBuffer(slice);
+                        };
+
+                        reader.onload = (e) => {
+                            // Control de Buffer (Backpressure)
+                            if (dc.bufferedAmount > 1024 * 1024 * 2) { 
+                                setTimeout(() => reader.onload(e), 50); 
+                                return;
+                            }
+
+                            try {
                                 dc.send(e.target.result); 
                                 offset += e.target.result.byteLength;
+                                
+                                // Avisar a la interfaz cómo vamos
+                                const progress = Math.floor((offset / file.size) * 100);
+                                if(progressCallback) progressCallback(progress);
+
                                 if (offset < file.size) {
-                                    readSlice(offset); 
+                                    readSlice(); 
                                 } else {
                                     dc.send(JSON.stringify({ type: 'FILE_END' }));
                                 }
-                            };
+                            } catch (error) {
+                                console.error("Error enviando archivo:", error);
+                            }
+                        };
 
-                            const readSlice = (o) => {
-                                const slice = file.slice(offset, o + chunkSize);
-                                reader.readAsArrayBuffer(slice);
-                            };
-                            readSlice(0); 
-                        }
+                        readSlice(); 
                     });
                 }
             };
         })();
+  
 
 /**
  * 7. API DE SUBTÍTULOS IA (ACTUALIZADA)
@@ -1574,19 +1768,16 @@ const ReactionAPI = (() => {
                         // Aquí iría la lógica para mutear el audio del objeto de video localmente
                         alert('Has silenciado a este usuario (Visualización).');
                     } else if (type === 'msg') {
-    // Capturar el nombre del usuario desde la tarjeta
+    // Capturar el nombre del usuario
     let targetName = targetCard.querySelector('.tag-name').innerText;
-    // Limpiar emojis si los tiene (como el de host o pines)
     targetName = targetName.replace('🎙️ ', '').replace('👤 ', '').trim();
 
-    // Cambiar a la pestaña de chat
+    // Cambiar a la pestaña principal de Chat en el Sidebar
     const tabChat = document.querySelector('.tab-btn[onclick*="panel-chat"]');
     if(tabChat) UIAPI.switchTab('panel-chat', tabChat);
     
-    // Preparar el input con un formato claro
-    const chatInput = document.getElementById('chatInput');
-    chatInput.value = `/privado "${targetName}" : `;
-    chatInput.focus();
+    // Abrir (o crear) la pestaña interna para ese usuario
+    ChatAPI.openPrivateChat(targetName);
 }
                 }
             };
