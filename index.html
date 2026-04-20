@@ -499,6 +499,30 @@
             .sidebar-content {
                 height: calc(100vh - 120px); /* Ajusta el alto para que el input del chat no se pierda */
             }
+            /* --- BOTONES DE VIDEO SIEMPRE VISIBLES EN MÓVIL --- */
+            .hover-controls {
+                opacity: 1 !important; 
+                background: transparent !important;
+                backdrop-filter: none !important;
+                align-items: flex-end !important; /* Los manda abajo */
+                justify-content: flex-end !important; /* Los manda a la derecha */
+                padding: 10px !important;
+                pointer-events: none; /* Evita que bloqueen la pantalla al hacer doble clic */
+            }
+            
+            .hover-controls .btn-overlay {
+                background: rgba(0,0,0,0.6) !important; /* Fondo sutil para que se lean */
+                box-shadow: 0 4px 10px rgba(0,0,0,0.8) !important;
+                pointer-events: all; /* Activa el clic solo en los botones */
+                width: 38px; height: 38px; font-size: 1rem;
+            }
+
+            /* Ocultar botones cuando ya entró en pantalla completa */
+            .video-card:fullscreen .hover-controls,
+            .video-card:-webkit-full-screen .hover-controls,
+            .video-card:-moz-full-screen .hover-controls {
+                display: none !important;
+            }
         }
     </style>
 </head>
@@ -937,13 +961,21 @@
                 
                 // --- NUEVA FUNCIÓN ---
                 toggleFullScreen: (element) => {
-                    AudioAPI.playClick(); // Sonido de feedback
+                    if(typeof AudioAPI !== 'undefined') AudioAPI.playClick();
+                    
+                    // Busca el video real dentro de la tarjeta
+                    const videoEl = element.querySelector('video');
+
                     if (!document.fullscreenElement) {
-                        // Entrar a pantalla completa
+                        // Intentar poner la tarjeta completa
                         if (element.requestFullscreen) {
                             element.requestFullscreen();
-                        } else if (element.webkitRequestFullscreen) { /* Safari */
+                        } else if (element.webkitRequestFullscreen) { /* Chrome/Safari en PC */
                             element.webkitRequestFullscreen();
+                        } 
+                        // ¡NUEVO! Soporte nativo para iPhone y móviles
+                        else if (videoEl && videoEl.webkitEnterFullscreen) { 
+                            videoEl.webkitEnterFullscreen();
                         } else if (element.msRequestFullscreen) { /* IE11 */
                             element.msRequestFullscreen();
                         }
@@ -951,9 +983,9 @@
                         // Salir de pantalla completa
                         if (document.exitFullscreen) {
                             document.exitFullscreen();
-                        } else if (document.webkitExitFullscreen) { /* Safari */
+                        } else if (document.webkitExitFullscreen) {
                             document.webkitExitFullscreen();
-                        } else if (document.msExitFullscreen) { /* IE11 */
+                        } else if (document.msExitFullscreen) {
                             document.msExitFullscreen();
                         }
                     }
