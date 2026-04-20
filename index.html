@@ -296,15 +296,15 @@
 
 /* Menú emergente de reacciones en el Dock */
 .reactions-menu {
-    position: absolute; bottom: 70px; display: flex; gap: 15px;
-    background: var(--glass-bg); padding: 15px; border-radius: 20px;
-    border: 1px solid var(--glass-border); opacity: 0; pointer-events: none;
-    transform: translateY(15px); transition: var(--transition-bounce);
-    backdrop-filter: blur(20px);
-}
-.reactions-menu.active {
-    opacity: 1; pointer-events: all; transform: translateY(0);
-}
+                position: fixed !important;
+                bottom: 80px !important; /* Lo eleva por encima del dock */
+                left: 50% !important;
+                transform: translateX(-50%) translateY(15px) !important;
+                z-index: 9999 !important;
+            }
+            .reactions-menu.active {
+                transform: translateX(-50%) translateY(0) !important;
+            }
 .reaction-btn {
     background: none; border: none; font-size: 1.8rem; cursor: pointer;
     transition: var(--transition-bounce);
@@ -383,6 +383,9 @@
     background-color: #000;
     border: none;
     border-radius: 0;
+}
+.video-card:fullscreen video {
+    object-fit: contain !important;
 }
 /* ==========================================================================
            13. ADAPTACIÓN PARA DISPOSITIVOS MÓVILES (BLINDADA)
@@ -1500,17 +1503,18 @@ peers[remoteUserId] = { pc, channel: dataChannel };
                                 case 'REACTION':
                                 ReactionAPI.showRemoteReaction(event.data.emoji, event.data.sender);
                                 break;
-    if (event.data.isPrivate) {
-        // Solo renderizar si mi nombre coincide con el target
-        if (event.data.target === getMyName()) {
-            ChatAPI.receive(event.data.sender, event.data.text, true);
-        }
-    } else {
-        // Si no es privado, lo ven todos
-        ChatAPI.receive(event.data.sender, event.data.text, false);
-    }
-    break;
-    case 'TYPING':
+                            case 'CHAT_MESSAGE':
+                                if (event.data.isPrivate) {
+                                    // Solo renderizar si mi nombre coincide con el target
+                                    if (event.data.target === getMyName()) {
+                                        ChatAPI.receive(event.data.sender, event.data.text, true);
+                                    }
+                                } else {
+                                    // Si no es privado, lo ven todos
+                                    ChatAPI.receive(event.data.sender, event.data.text, false);
+                                }
+                                break;
+                            case 'TYPING':
                                 // Solo mostrar si estamos en la sala general, o si es un mensaje privado dirigido a nosotros
                                 if (!event.data.isPrivate || event.data.target === getMyName()) {
                                     ChatAPI.showTyping(event.data.sender);
