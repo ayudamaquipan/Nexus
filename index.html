@@ -1099,79 +1099,108 @@
         const FileAPI = (() => {
             const dz = document.getElementById('fileDropzone');
             const list = document.getElementById('fileList');
-            const chat = document.getElementById('chatWindow');
             const fileInput = document.getElementById('fileInput');
+
+            // Función auxiliar para obtener el chat correcto
+            const getChatContainer = () => document.getElementById('chat-sala');
 
             // Cuando TÚ envías un archivo
             const processFile = (file) => {
-    const size = (file.size / 1024 / 1024).toFixed(2);
-    const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
-    const fileId = 'file-upload-' + Date.now(); // Identificador único
-    
-    // Mostrar localmente en la lista
-    list.innerHTML += `<div class="file-item"><span>📄</span> <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${file.name}</div> <span style="font-size:0.8rem; color:var(--text-muted);">${size}MB</span></div>`;
-    
-    // Mostrar en el chat con estado dinámico
-    chat.innerHTML += `
-        <div class="msg self">
-            <div class="msg-header"><span>Tú compartiste un archivo</span><span>${time}</span></div>
-            <div class="msg-bubble" id="${fileId}" style="background:var(--surface-1); border:1px solid var(--neon-cyan); display:flex; align-items:center; gap:10px; transition: 0.3s;">
-                <span style="font-size:1.5rem">📤</span> <b>${file.name}</b> <span class="upload-status" style="color: var(--neon-cyan); font-weight: bold;">(Calculando...)</span>
-            </div>
-        </div>`;
-    chat.scrollTop = chat.scrollHeight;
+                const size = (file.size / 1024 / 1024).toFixed(2);
+                const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
+                const fileId = 'file-upload-' + Date.now(); // Identificador único
+                
+                // Mostrar localmente en la lista
+                list.innerHTML += `<div class="file-item"><span>📄</span> <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${file.name}</div> <span style="font-size:0.8rem; color:var(--text-muted);">${size}MB</span></div>`;
+                
+                // Mostrar en el chat general
+                const chat = getChatContainer();
+                if(chat) {
+                    chat.innerHTML += `
+                        <div class="msg self">
+                            <div class="msg-header"><span>Tú compartiste un archivo</span><span>${time}</span></div>
+                            <div class="msg-bubble" id="${fileId}" style="background:var(--surface-1); border:1px solid var(--neon-cyan); display:flex; align-items:center; gap:10px; transition: 0.3s;">
+                                <span style="font-size:1.5rem">📤</span> <b>${file.name}</b> <span class="upload-status" style="color: var(--neon-cyan); font-weight: bold;">(Calculando...)</span>
+                            </div>
+                        </div>`;
+                    chat.scrollTop = chat.scrollHeight;
+                }
 
-    // INICIAR TRANSFERENCIA P2P pasando una función que actualiza el progreso
-    NetworkAPI.sendFileP2P(file, (progress) => {
-        const bubble = document.getElementById(fileId);
-        if(bubble) {
-            const statusEl = bubble.querySelector('.upload-status');
-            if(progress >= 100) {
-                statusEl.innerText = '(Enviado ✅)';
-                statusEl.style.color = 'var(--neon-green)';
-                bubble.style.borderColor = 'var(--neon-green)';
-            } else {
-                statusEl.innerText = `(${progress}%)`;
+                // INICIAR TRANSFERENCIA P2P
+                NetworkAPI.sendFileP2P(file, (progress) => {
+                    const bubble = document.getElementById(fileId);
+                    if(bubble) {
+                        const statusEl = bubble.querySelector('.upload-status');
+                        if(progress >= 100) {
+                            statusEl.innerText = '(Enviado ✅)';
+                            statusEl.style.color = 'var(--neon-green)';
+                            bubble.style.borderColor = 'var(--neon-green)';
+                        } else {
+                            statusEl.innerText = `(${progress}%)`;
+                        }
+                    }
+                });
+            };
+
+            // --- LOS "ESCUCHADORES" QUE FALTABAN ---
+            
+            // 1. Cuando seleccionas un archivo por la ventana tradicional
+            if(fileInput) {
+                fileInput.addEventListener('change', (e) => {
+                    if (e.target.files.length > 0) processFile(e.target.files[0]);
+                });
             }
-        }
-    });
-};
+
+            // 2. Cuando arrastras y sueltas (Drag & Drop)
+            if(dz) {
+                dz.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dz.classList.add('drag-over');
+                });
+                dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+                dz.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dz.classList.remove('drag-over');
+                    if (e.dataTransfer.files.length > 0) processFile(e.dataTransfer.files[0]);
+                });
+            }
+
             return {
                 // Cuando TÚ RECIBES un archivo de la otra persona
                 receiveFile: (meta, blobUrl) => {
-    const size = (meta.size / 1024 / 1024).toFixed(2);
-    const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
-    
-    if(typeof AudioAPI !== 'undefined') AudioAPI.playPop();
+                    const size = (meta.size / 1024 / 1024).toFixed(2);
+                    const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
+                    
+                    if(typeof AudioAPI !== 'undefined') AudioAPI.playPop();
 
-    // Lógica para detectar si es una imagen
-    const isImage = meta.type && meta.type.startsWith('image/');
-    const mediaPreview = isImage 
-        ? `<img src="${blobUrl}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 1px solid var(--glass-border);">` 
-        : '';
+                    const isImage = meta.type && meta.type.startsWith('image/');
+                    const mediaPreview = isImage 
+                        ? `<img src="${blobUrl}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 1px solid var(--glass-border);">` 
+                        : '';
 
-    // Mostrar en el panel lateral de archivos
-    list.innerHTML += `
-        <div class="file-item">
-            <span>${isImage ? '🖼️' : '📄'}</span> 
-            <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${meta.name}</div> 
-            <a href="${blobUrl}" download="${meta.name}" style="background:var(--neon-purple); color:white; padding:4px 8px; border-radius:4px; text-decoration:none; font-size:0.8rem;">Descargar</a>
-        </div>`;
-        
-    // Mostrar en el chat
-    chat.innerHTML += `
-        <div class="msg">
-            <div class="msg-header"><span>${meta.sender} te envió un archivo</span><span>${time}</span></div>
-            <div class="msg-bubble" style="background:var(--surface-2); border:1px solid var(--neon-purple); display:flex; flex-direction:column; gap:10px;">
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <span style="font-size:1.5rem">${isImage ? '🖼️' : '📥'}</span> <b>${meta.name}</b> (${size}MB)
-                </div>
-                ${mediaPreview}
-                <a href="${blobUrl}" download="${meta.name}" style="background:rgba(176, 38, 255, 0.2); color:var(--text-main); padding:8px; border-radius:6px; text-decoration:none; text-align:center; font-weight:bold; width:100%; transition: 0.2s;">↓ Descargar / Guardar</a>
-            </div>
-        </div>`;
-    chat.scrollTop = chat.scrollHeight;
-}
+                    list.innerHTML += `
+                        <div class="file-item">
+                            <span>${isImage ? '🖼️' : '📄'}</span> 
+                            <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${meta.name}</div> 
+                            <a href="${blobUrl}" download="${meta.name}" style="background:var(--neon-purple); color:white; padding:4px 8px; border-radius:4px; text-decoration:none; font-size:0.8rem;">Descargar</a>
+                        </div>`;
+                        
+                    const chat = getChatContainer();
+                    if(chat) {
+                        chat.innerHTML += `
+                            <div class="msg">
+                                <div class="msg-header"><span>${meta.sender} te envió un archivo</span><span>${time}</span></div>
+                                <div class="msg-bubble" style="background:var(--surface-2); border:1px solid var(--neon-purple); display:flex; flex-direction:column; gap:10px;">
+                                    <div style="display:flex; align-items:center; gap:10px;">
+                                        <span style="font-size:1.5rem">${isImage ? '🖼️' : '📥'}</span> <b>${meta.name}</b> (${size}MB)
+                                    </div>
+                                    ${mediaPreview}
+                                    <a href="${blobUrl}" download="${meta.name}" style="background:rgba(176, 38, 255, 0.2); color:var(--text-main); padding:8px; border-radius:6px; text-decoration:none; text-align:center; font-weight:bold; width:100%; transition: 0.2s;">↓ Descargar / Guardar</a>
+                                </div>
+                            </div>`;
+                        chat.scrollTop = chat.scrollHeight;
+                    }
+                }
             };
         })();
 
@@ -1469,7 +1498,7 @@ peers[remoteUserId] = { pc, channel: dataChannel };
                                 SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
                                 break;
                             case 'SCREEN_SHARE_STARTED':
-                                const chat = document.getElementById('chatWindow');
+                                const chat = document.getElementById('chat-sala');
                                 chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 ${event.data.userName} está compartiendo pantalla.</div></div>`;
                                 break;
                         }
@@ -1719,7 +1748,7 @@ const ReactionAPI = (() => {
             setTimeout(() => el.remove(), 2500);
 
             // Mostrar también en el chat como registro visual sin fondo
-            const chat = document.getElementById('chatWindow');
+            const chat = document.getElementById('chat-sala');
             chat.innerHTML += `
                 <div class="msg self" style="align-items: flex-end;">
                     <div class="msg-bubble" style="background: transparent; border: none; font-size: 2rem; padding: 0;">
