@@ -145,14 +145,26 @@
         .card-overlays { position: absolute; inset: 0; pointer-events: none; z-index: 10; display: flex; flex-direction: column; justify-content: space-between; padding: 15px; }
         .tag-name { background: rgba(0,0,0,0.7); backdrop-filter: blur(10px); padding: 8px 16px; border-radius: var(--radius-md); font-size: 0.9rem; font-weight: 600; border: 1px solid var(--glass-border); align-self: flex-start; }
         
-        .hover-controls {
-            position: absolute; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(2px);
-            display: flex; justify-content: center; align-items: center; gap: 15px;
-            opacity: 0; transition: var(--transition-smooth); pointer-events: all;
-        }
-        .video-card:hover .hover-controls { opacity: 1; }
-        .btn-overlay { width: 45px; height: 45px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.1); color: white; font-size: 1.2rem; cursor: pointer; transition: var(--transition-bounce); }
-        .btn-overlay:hover { background: white; color: black; transform: scale(1.15); }
+        /* --- SOLUCIÓN AL EFECTO BORROSO ATASCADO EN MÓVILES --- */
+            
+            /* 1. Quitamos el fondo oscuro y el efecto borroso (blur) en celulares */
+            .hover-controls {
+                background: transparent !important;
+                backdrop-filter: none !important;
+            }
+            
+            /* Le damos una sombra a los botones para que se sigan viendo bien sin el fondo oscuro */
+            .hover-controls .btn-overlay {
+                background: rgba(0,0,0,0.6) !important;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.8);
+            }
+
+            /* 2. Si el video entra en Pantalla Completa, ocultamos los botones para que no molesten */
+            .video-card:fullscreen .hover-controls,
+            .video-card:-webkit-full-screen .hover-controls,
+            .video-card:-moz-full-screen .hover-controls {
+                display: none !important;
+            }
 
         /* ==========================================================================
            5. OVERLAYS: SUBTÍTULOS Y PIZARRA
@@ -296,15 +308,18 @@
 
 /* Menú emergente de reacciones en el Dock */
 .reactions-menu {
-                position: fixed !important;
-                bottom: 80px !important; /* Lo eleva por encima del dock */
-                left: 50% !important;
-                transform: translateX(-50%) translateY(15px) !important;
-                z-index: 9999 !important;
-            }
-            .reactions-menu.active {
-                transform: translateX(-50%) translateY(0) !important;
-            }
+    position: fixed; 
+    bottom: 100px; 
+    left: 50%; 
+    display: flex; gap: 15px;
+    background: var(--glass-bg); padding: 15px; border-radius: 20px;
+    border: 1px solid var(--glass-border); opacity: 0; pointer-events: none;
+    transform: translateX(-50%) translateY(15px); transition: var(--transition-bounce);
+    backdrop-filter: blur(20px); z-index: 9999;
+}
+.reactions-menu.active {
+    opacity: 1; pointer-events: all; transform: translateX(-50%) translateY(0);
+}
 .reaction-btn {
     background: none; border: none; font-size: 1.8rem; cursor: pointer;
     transition: var(--transition-bounce);
@@ -575,16 +590,23 @@
                     
                     <div style="position: relative; display: flex; justify-content: center;">
                         <div class="reactions-menu" id="reactionsMenu">
-                            <button class="reaction-btn" onclick="ReactionAPI.send('👍')">👍</button>
-                            <button class="reaction-btn" onclick="ReactionAPI.send('❤️')">❤️</button>
-                            <button class="reaction-btn" onclick="ReactionAPI.send('😂')">😂</button>
-                            <button class="reaction-btn" onclick="ReactionAPI.send('👏')">👏</button>
-                            <button class="reaction-btn" onclick="ReactionAPI.send('🚀')">🚀</button>
-                        </div>
-                        <button class="btn-dock" data-tooltip="Reacciones" onclick="ReactionAPI.toggleMenu()">✨</button>
-                    </div>
+    <button class="reaction-btn" onclick="ReactionAPI.send('👍')">👍</button>
+    <button class="reaction-btn" onclick="ReactionAPI.send('❤️')">❤️</button>
+    <button class="reaction-btn" onclick="ReactionAPI.send('😂')">😂</button>
+    <button class="reaction-btn" onclick="ReactionAPI.send('👏')">👏</button>
+    <button class="reaction-btn" onclick="ReactionAPI.send('🚀')">🚀</button>
+</div>
 
-                    <div class="dock-divider"></div>
+<div class="dock-wrapper">
+    <div class="dock-container">
+        <button class="btn-dock" data-tooltip="Micrófono" id="btnMic" onclick="MediaAPI.toggleMic(this)">🎤</button>
+        <button class="btn-dock" data-tooltip="Cámara" id="btnCam" onclick="MediaAPI.toggleCam(this)">📹</button>
+        
+        <div class="dock-divider"></div>
+        
+        <button class="btn-dock" data-tooltip="Reacciones" onclick="ReactionAPI.toggleMenu()">✨</button>
+
+        <div class="dock-divider"></div>
                     <button class="btn-dock" id="btnSidebarToggle" data-tooltip="Ocultar Panel" onclick="UIAPI.toggleSidebar(this)">🗂️</button>
                     <button class="btn-dock danger" data-tooltip="Salir de la llamada" onclick="ExitAPI.leaveCall()">📞</button>
                     <button class="btn-dock btn-end" id="btnEndMeeting" data-tooltip="Terminar para todos" onclick="ExitAPI.promptEndMeeting()" style="display: none;">🛑</button>
@@ -1500,7 +1522,15 @@ peers[remoteUserId] = { pc, channel: dataChannel };
                                 }
                                 break;
                             case 'CHAT_MESSAGE':
-                                case 'REACTION':
+                                if (event.data.isPrivate) {
+                                    if (event.data.target === getMyName()) {
+                                        ChatAPI.receive(event.data.sender, event.data.text, true);
+                                    }
+                                } else {
+                                    ChatAPI.receive(event.data.sender, event.data.text, false);
+                                }
+                                break;
+                            case 'REACTION':
                                 ReactionAPI.showRemoteReaction(event.data.emoji, event.data.sender);
                                 break;
                             case 'CHAT_MESSAGE':
