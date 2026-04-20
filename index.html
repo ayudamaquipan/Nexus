@@ -800,6 +800,12 @@
                     }
                 },
                 toggleScreenShare: async (btn) => {
+                    // 1. AVISO PARA CELULARES
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                        alert("⚠️ Tu navegador o celular no soporta compartir pantalla. El sistema operativo bloquea esta función en aplicaciones web móviles.");
+                        return;
+                    }
+
                     const videoEl = document.getElementById('videoLocal');
                     if(!screenStream) {
                         try {
@@ -808,14 +814,32 @@
                             document.getElementById('card-local').classList.remove('mirror');
                             btn.classList.add('active-feature');
                             
-                            // --- LÓGICA DE AUTO-ENFOQUE ---
-                            // Notificamos a los demás que estamos compartiendo
-                            NetworkAPI.broadcastEvent('SCREEN_SHARE_STARTED', { id: 'card-local' });
+                            // 2. MAGIA WEBRTC: Reemplazar la cámara por la pantalla en la red
+                            const screenTrack = screenStream.getVideoTracks()[0];
+                            NetworkAPI.replaceVideoTrack(screenTrack);
                             
-                            screenStream.getVideoTracks()[0].onended = () => MediaAPI.toggleScreenShare(btn);
-                        } catch(e) { /* Cancelado */ }
+                            NetworkAPI.broadcastEvent('SCREEN_SHARE_STARTED', { id: 'card-local', userName: getMyName() });
+                            
+                            // Cuando dejas de compartir desde el botón de Windows/Chrome
+                            screenTrack.onended = () => MediaAPI.toggleScreenShare(btn);
+                        } catch(e) { 
+                            console.error("Compartir pantalla cancelado o falló", e);
+                        }
                     } else {
-                        // ... (resto de tu código para detener)
+                        // 3. APAGAR COMPARTIR PANTALLA
+                        screenStream.getTracks().forEach(track => track.stop());
+                        screenStream = null;
+                        
+                        // Devolver tu cámara a tu vista local
+                        videoEl.srcObject = localStream;
+                        document.getElementById('card-local').classList.add('mirror');
+                        btn.classList.remove('active-feature');
+                        
+                        // MAGIA WEBRTC: Devolver tu cámara a los demás
+                        const camTrack = localStream.getVideoTracks()[0];
+                        NetworkAPI.replaceVideoTrack(camTrack);
+                        
+                        // Quitar el cartel de "Compartiendo" (Opcional, pero buena práctica)
                         NetworkAPI.broadcastEvent('SCREEN_SHARE_STOPPED');
                     }
                 },
@@ -1473,6 +1497,9 @@ peers[remoteUserId] = { pc, channel: dataChannel };
                                 }
                                 break;
                             case 'CHAT_MESSAGE':
+                                case 'REACTION':
+                                ReactionAPI.showRemoteReaction(event.data.emoji, event.data.sender);
+                                break;
     if (event.data.isPrivate) {
         // Solo renderizar si mi nombre coincide con el target
         if (event.data.target === getMyName()) {
@@ -1577,7 +1604,17 @@ peers[remoteUserId] = { pc, channel: dataChannel };
 
                         readSlice(); 
                     });
-                }
+                },
+                replaceVideoTrack: (newVideoTrack) => {
+                        // Busca todas las conexiones abiertas con otras personas
+                        Object.values(peers).forEach(peer => {
+                            if(peer.pc) {
+                                // Busca el "tubo" que envía video y reemplaza el origen
+                                const sender = peer.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+                                if(sender) sender.replaceTrack(newVideoTrack);
+                            }
+                        });
+                    }
             };
         })();
   
@@ -1731,33 +1768,39 @@ const ReactionAPI = (() => {
             menu.classList.toggle('active');
         },
         send: (emoji) => {
-            menu.classList.remove('active'); // Cierra el menú al elegir
+            menu.classList.remove('active'); 
 
-            // Crear el elemento visual
+            // Mostrar en TU pantalla
+            ReactionAPI.showRemoteReaction(emoji, "Tú", true);
+
+            // ENVIAR POR LA RED (¡Esto faltaba!)
+            const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
+            NetworkAPI.broadcastEvent('REACTION', { emoji: emoji, sender: myName });
+        },
+        // NUEVO: Función que dibuja la reacción cuando llega de internet
+        showRemoteReaction: (emoji, senderName, isSelf = false) => {
             const el = document.createElement('div');
             el.className = 'floating-emoji';
             el.innerText = emoji;
-            
-            // Efecto de dispersión horizontal aleatoria para que se vea natural
             const randomX = (Math.random() - 0.5) * 80; 
             el.style.left = `calc(50% + ${randomX}px)`;
-
             container.appendChild(el);
-
-            // Eliminar del DOM después de que termine la animación (2.5s)
             setTimeout(() => el.remove(), 2500);
 
-            // Mostrar también en el chat como registro visual sin fondo
+            // Mostrar también en el chat
             const chat = document.getElementById('chat-sala');
-            chat.innerHTML += `
-                <div class="msg self" style="align-items: flex-end;">
-                    <div class="msg-bubble" style="background: transparent; border: none; font-size: 2rem; padding: 0;">
-                        ${emoji}
-                    </div>
-                </div>`;
-            chat.scrollTop = chat.scrollHeight;
-
-            // En el futuro, aquí llamaríamos a NetworkAPI.broadcastReaction(emoji)
+            if (chat) {
+                const align = isSelf ? 'self' : '';
+                const senderTitle = isSelf ? '' : `<div class="msg-header"><span>${senderName} reaccionó:</span></div>`;
+                chat.innerHTML += `
+                    <div class="msg ${align}" style="align-items: ${isSelf ? 'flex-end' : 'flex-start'};">
+                        ${senderTitle}
+                        <div class="msg-bubble" style="background: transparent; border: none; font-size: 2rem; padding: 0;">
+                            ${emoji}
+                        </div>
+                    </div>`;
+                chat.scrollTop = chat.scrollHeight;
+            }
         }
     };
 })();
