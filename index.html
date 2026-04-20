@@ -924,26 +924,53 @@
 
             return {
                 send: () => {
-                    const txt = input.value.trim();
-                    if(!txt) return;
-                    
-                    // 1. Lo mostramos en nuestra pantalla
-                    addMsg(txt, true, "Tú");
-                    input.value = '';
-                    AudioAPI.playPop(); 
-                    
-                    // 2. Extraemos nuestro nombre sin los emojis
-                    const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
-                    
-                    // 3. Lo enviamos a la red para que los demás lo vean
-                    NetworkAPI.broadcastEvent('CHAT_MESSAGE', { sender: myName, text: txt });
-                },
-                
-                // Función que llamará Firebase cuando llegue un mensaje de otro
-                receive: (senderName, text) => {
-                    addMsg(text, false, senderName);
-                    AudioAPI.playPop();
-                }
+    const txt = input.value.trim();
+    if(!txt) return;
+
+    let isPrivate = false;
+    let targetName = null;
+    let messageText = txt;
+
+    // Detectar si es un mensaje privado: /privado "Nombre" : mensaje
+    if (txt.startsWith('/privado')) {
+        const match = txt.match(/^\/privado\s+"([^"]+)"\s*:\s*(.*)$/);
+        if (match) {
+            isPrivate = true;
+            targetName = match[1];
+            messageText = match[2];
+            if(!messageText) return; // No enviar si está vacío
+        }
+    }
+
+    const myName = document.getElementById('local-tag-name').innerText.replace('🎙️ ', '').replace(' (Tú)', '');
+    
+    // 1. Lo mostramos en nuestra pantalla
+    if (isPrivate) {
+        addMsg(`<span style="color: var(--neon-purple);">🔒 Privado para ${targetName}:</span><br>${messageText}`, true, "Tú");
+    } else {
+        addMsg(messageText, true, "Tú");
+    }
+    
+    input.value = '';
+    AudioAPI.playPop(); 
+    
+    // 2. Lo enviamos a la red (Firebase)
+    NetworkAPI.broadcastEvent('CHAT_MESSAGE', { 
+        sender: myName, 
+        text: messageText,
+        isPrivate: isPrivate,
+        target: targetName 
+    });
+},
+
+receive: (senderName, text, isPrivate = false) => {
+    if (isPrivate) {
+        addMsg(`<span style="color: var(--neon-purple);">🔒 Privado de ${senderName}:</span><br>${text}`, false, senderName);
+    } else {
+        addMsg(text, false, senderName);
+    }
+    AudioAPI.playPop();
+}
             };
         })();
 
@@ -995,32 +1022,39 @@
             return {
                 // Cuando TÚ RECIBES un archivo de la otra persona
                 receiveFile: (meta, blobUrl) => {
-                    const size = (meta.size / 1024 / 1024).toFixed(2);
-                    const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
-                    
-                    if(typeof AudioAPI !== 'undefined') AudioAPI.playPop();
+    const size = (meta.size / 1024 / 1024).toFixed(2);
+    const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute:'2-digit'});
+    
+    if(typeof AudioAPI !== 'undefined') AudioAPI.playPop();
 
-                    // Mostrar en el panel lateral con botón de descarga
-                    list.innerHTML += `
-                        <div class="file-item">
-                            <span>📄</span> 
-                            <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${meta.name}</div> 
-                            <a href="${blobUrl}" download="${meta.name}" style="background:var(--neon-purple); color:white; padding:4px 8px; border-radius:4px; text-decoration:none; font-size:0.8rem;">Descargar</a>
-                        </div>`;
-                        
-                    // Mostrar en el chat con botón de descarga
-                    chat.innerHTML += `
-                        <div class="msg">
-                            <div class="msg-header"><span>${meta.sender} te envió un archivo</span><span>${time}</span></div>
-                            <div class="msg-bubble" style="background:var(--surface-2); border:1px solid var(--neon-purple); display:flex; flex-direction:column; gap:10px;">
-                                <div style="display:flex; align-items:center; gap:10px;">
-                                    <span style="font-size:1.5rem">📥</span> <b>${meta.name}</b> (${size}MB)
-                                </div>
-                                <a href="${blobUrl}" download="${meta.name}" style="background:var(--neon-purple); color:white; padding:8px; border-radius:6px; text-decoration:none; text-align:center; font-weight:bold; width:100%;">↓ Descargar Archivo</a>
-                            </div>
-                        </div>`;
-                    chat.scrollTop = chat.scrollHeight;
-                }
+    // Lógica para detectar si es una imagen
+    const isImage = meta.type && meta.type.startsWith('image/');
+    const mediaPreview = isImage 
+        ? `<img src="${blobUrl}" style="max-width: 100%; border-radius: 8px; margin-top: 10px; border: 1px solid var(--glass-border);">` 
+        : '';
+
+    // Mostrar en el panel lateral de archivos
+    list.innerHTML += `
+        <div class="file-item">
+            <span>${isImage ? '🖼️' : '📄'}</span> 
+            <div style="flex-grow:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${meta.name}</div> 
+            <a href="${blobUrl}" download="${meta.name}" style="background:var(--neon-purple); color:white; padding:4px 8px; border-radius:4px; text-decoration:none; font-size:0.8rem;">Descargar</a>
+        </div>`;
+        
+    // Mostrar en el chat
+    chat.innerHTML += `
+        <div class="msg">
+            <div class="msg-header"><span>${meta.sender} te envió un archivo</span><span>${time}</span></div>
+            <div class="msg-bubble" style="background:var(--surface-2); border:1px solid var(--neon-purple); display:flex; flex-direction:column; gap:10px;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <span style="font-size:1.5rem">${isImage ? '🖼️' : '📥'}</span> <b>${meta.name}</b> (${size}MB)
+                </div>
+                ${mediaPreview}
+                <a href="${blobUrl}" download="${meta.name}" style="background:rgba(176, 38, 255, 0.2); color:var(--text-main); padding:8px; border-radius:6px; text-decoration:none; text-align:center; font-weight:bold; width:100%; transition: 0.2s;">↓ Descargar / Guardar</a>
+            </div>
+        </div>`;
+    chat.scrollTop = chat.scrollHeight;
+}
             };
         })();
 
@@ -1249,8 +1283,16 @@
                                 }
                                 break;
                             case 'CHAT_MESSAGE':
-                                ChatAPI.receive(event.data.sender, event.data.text);
-                                break;
+    if (event.data.isPrivate) {
+        // Solo renderizar si mi nombre coincide con el target
+        if (event.data.target === getMyName()) {
+            ChatAPI.receive(event.data.sender, event.data.text, true);
+        }
+    } else {
+        // Si no es privado, lo ven todos
+        ChatAPI.receive(event.data.sender, event.data.text, false);
+    }
+    break;
                             case 'SUBTITLE':
                                 SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
                                 break;
@@ -1532,15 +1574,20 @@ const ReactionAPI = (() => {
                         // Aquí iría la lógica para mutear el audio del objeto de video localmente
                         alert('Has silenciado a este usuario (Visualización).');
                     } else if (type === 'msg') {
-                        // Cambiar a la pestaña de chat
-                        const tabChat = document.querySelector('.tab-btn[onclick*="panel-chat"]');
-                        if(tabChat) UIAPI.switchTab('panel-chat', tabChat);
-                        
-                        // Preparar el input
-                        const chatInput = document.getElementById('chatInput');
-                        chatInput.value = "/privado ";
-                        chatInput.focus();
-                    }
+    // Capturar el nombre del usuario desde la tarjeta
+    let targetName = targetCard.querySelector('.tag-name').innerText;
+    // Limpiar emojis si los tiene (como el de host o pines)
+    targetName = targetName.replace('🎙️ ', '').replace('👤 ', '').trim();
+
+    // Cambiar a la pestaña de chat
+    const tabChat = document.querySelector('.tab-btn[onclick*="panel-chat"]');
+    if(tabChat) UIAPI.switchTab('panel-chat', tabChat);
+    
+    // Preparar el input con un formato claro
+    const chatInput = document.getElementById('chatInput');
+    chatInput.value = `/privado "${targetName}" : `;
+    chatInput.focus();
+}
                 }
             };
         })();
