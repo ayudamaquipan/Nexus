@@ -1503,25 +1503,28 @@ peers[remoteUserId] = { pc, channel: dataChannel };
                         }
                     });
 
-                    // Escuchar cuando alguien desaparece de la lista (cerró la pestaña)
+                    // --- 1. Escuchar a los que entran o YA ESTABAN ---
+                    presenceRef.on('child_added', (snapshot) => {
+                        const userId = snapshot.key;
+                        const userData = snapshot.val();
+                        
+                        if (userId === localUserId) return; // No agregarnos a nosotros mismos
+                        
+                        // Agregar a la lista de usuarios en el panel lateral si no está
+                        const usersList = document.getElementById('usersList');
+                        if(!document.getElementById(`list-user-${userId}`)) {
+                            usersList.innerHTML += `
+                                <div class="file-item" id="list-user-${userId}" style="justify-content: space-between;">
+                                    <span>👤 ${userData.name}</span>
+                                </div>`;
+                        }
+                    });
+
+                    // --- 2. Escuchar cuando alguien abandona la sala ---
                     presenceRef.on('child_removed', (snapshot) => {
                         const leftUserId = snapshot.key;
                         const leftUserName = snapshot.val().name;
-presenceRef.on('child_added', (snapshot) => {
-    const userId = snapshot.key;
-    const userData = snapshot.val();
-    
-    if (userId === localUserId) return; // No agregarnos a nosotros mismos
-    
-    // Agregar a la lista de usuarios en el panel lateral si no está
-    const usersList = document.getElementById('usersList');
-    if(!document.getElementById(`list-user-${userId}`)) {
-        usersList.innerHTML += `
-            <div class="file-item" id="list-user-${userId}" style="justify-content: space-between;">
-                <span>👤 ${userData.name}</span>
-            </div>`;
-    }
-});
+                        
                         // 1. Destruir la tarjeta de video
                         const card = document.getElementById(`card-remote-${leftUserId}`);
                         if(card) card.remove();
@@ -1554,9 +1557,10 @@ roomRef.orderByChild('timestamp').startAt(joinTime).on('child_added', async (sna
 
     switch(event.type) {
         case 'HELLO':
-            if (localUserId > event.senderId) {
-                await setupWebRTC(event.senderId, true, event.data.userName);
-            }
+            // Como ignoramos el pasado, el nuevo no ve nuestro HELLO.
+            // Por lo tanto, TÚ (que ya estabas en la sala) al recibir el HELLO del nuevo,
+            // SIEMPRE debes ser el que inicie la llamada (isInitiator = true).
+            await setupWebRTC(event.senderId, true, event.data.userName);
             break;
         case 'OFFER':
             if (event.data.targetId === localUserId) {
