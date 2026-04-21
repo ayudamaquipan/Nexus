@@ -1344,7 +1344,23 @@
             const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
             
             const peers = {}; 
-            const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            const servers = { 
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        /* Servidor TURN público para atravesar firewalls (Para producción, te sugiero crear una cuenta gratuita en Metered.ca o Twilio) */
+        { 
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        { 
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        }
+    ] 
+};
             
             let receivedBuffers = [];
             let receivingFileMeta = null;
@@ -1491,7 +1507,21 @@ peers[remoteUserId] = { pc, channel: dataChannel };
                     presenceRef.on('child_removed', (snapshot) => {
                         const leftUserId = snapshot.key;
                         const leftUserName = snapshot.val().name;
-
+presenceRef.on('child_added', (snapshot) => {
+    const userId = snapshot.key;
+    const userData = snapshot.val();
+    
+    if (userId === localUserId) return; // No agregarnos a nosotros mismos
+    
+    // Agregar a la lista de usuarios en el panel lateral si no está
+    const usersList = document.getElementById('usersList');
+    if(!document.getElementById(`list-user-${userId}`)) {
+        usersList.innerHTML += `
+            <div class="file-item" id="list-user-${userId}" style="justify-content: space-between;">
+                <span>👤 ${userData.name}</span>
+            </div>`;
+    }
+});
                         // 1. Destruir la tarjeta de video
                         const card = document.getElementById(`card-remote-${leftUserId}`);
                         if(card) card.remove();
@@ -1514,88 +1544,81 @@ peers[remoteUserId] = { pc, channel: dataChannel };
                         }
                     });
                     // --- FIN SISTEMA DE PRESENCIA ---
-                    roomRef.on('child_added', async (snapshot) => {
-                        const event = snapshot.val();
-                        if(event.senderId === localUserId) return; 
+                    // NUEVO: Guardamos el momento exacto en el que entramos para ignorar el pasado
+const joinTime = Date.now();
 
-                        switch(event.type) {
-                            case 'HELLO':
-                                if (localUserId > event.senderId) {
-                                    await setupWebRTC(event.senderId, true, event.data.userName);
-                                }
-                                break;
-                            case 'OFFER':
-                                if (event.data.targetId === localUserId) {
-                                    const pc = await setupWebRTC(event.senderId, false, event.data.userName);
-                                    await pc.setRemoteDescription(new RTCSessionDescription(event.data.offer));
-                                    const answer = await pc.createAnswer();
-                                    await pc.setLocalDescription(answer);
-                                    NetworkAPI.broadcastEvent('ANSWER', { 
-                                        answer, 
-                                        targetId: event.senderId, 
-                                        userName: getMyName() 
-                                    });
-                                }
-                                break;
-                            case 'ANSWER':
-                                if (event.data.targetId === localUserId) {
-                                    const pc = peers[event.senderId]?.pc;
-                                    if(pc) {
-                                        await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
-                                        const cardTag = document.querySelector(`#card-remote-${event.senderId} .tag-name`);
-                                        if(cardTag) cardTag.innerText = event.data.userName;
-                                    }
-                                }
-                                break;
-                            case 'ICE':
-                                if (event.data.targetId === localUserId) {
-                                    const pc = peers[event.senderId]?.pc;
-                                    if(pc) await pc.addIceCandidate(new RTCIceCandidate(event.data.candidate));
-                                }
-                                break;
-                            case 'CHAT_MESSAGE':
-                                if (event.data.isPrivate) {
-                                    if (event.data.target === getMyName()) {
-                                        ChatAPI.receive(event.data.sender, event.data.text, true);
-                                    }
-                                } else {
-                                    ChatAPI.receive(event.data.sender, event.data.text, false);
-                                }
-                                break;
-                            case 'REACTION':
-                                ReactionAPI.showRemoteReaction(event.data.emoji, event.data.sender);
-                                break;
-                            case 'CHAT_MESSAGE':
-                                if (event.data.isPrivate) {
-                                    // Solo renderizar si mi nombre coincide con el target
-                                    if (event.data.target === getMyName()) {
-                                        ChatAPI.receive(event.data.sender, event.data.text, true);
-                                    }
-                                } else {
-                                    // Si no es privado, lo ven todos
-                                    ChatAPI.receive(event.data.sender, event.data.text, false);
-                                }
-                                break;
-                            case 'TYPING':
-                                // Solo mostrar si estamos en la sala general, o si es un mensaje privado dirigido a nosotros
-                                if (!event.data.isPrivate || event.data.target === getMyName()) {
-                                    ChatAPI.showTyping(event.data.sender);
-                                }
-                                break;
-                            case 'STOP_TYPING':
-                                if (!event.data.isPrivate || event.data.target === getMyName()) {
-                                    ChatAPI.hideTyping();
-                                }
-                                break;
-                            case 'SUBTITLE':
-                                SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
-                                break;
-                            case 'SCREEN_SHARE_STARTED':
-                                const chat = document.getElementById('chat-sala');
-                                chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 ${event.data.userName} está compartiendo pantalla.</div></div>`;
-                                break;
-                        }
-                    });
+// NUEVO: Filtramos la consulta usando orderByChild y startAt
+roomRef.orderByChild('timestamp').startAt(joinTime).on('child_added', async (snapshot) => {
+    const event = snapshot.val();
+    if(event.senderId === localUserId) return; 
+
+    switch(event.type) {
+        case 'HELLO':
+            if (localUserId > event.senderId) {
+                await setupWebRTC(event.senderId, true, event.data.userName);
+            }
+            break;
+        case 'OFFER':
+            if (event.data.targetId === localUserId) {
+                const pc = await setupWebRTC(event.senderId, false, event.data.userName);
+                await pc.setRemoteDescription(new RTCSessionDescription(event.data.offer));
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                NetworkAPI.broadcastEvent('ANSWER', { 
+                    answer, 
+                    targetId: event.senderId, 
+                    userName: getMyName() 
+                });
+            }
+            break;
+        case 'ANSWER':
+            if (event.data.targetId === localUserId) {
+                const pc = peers[event.senderId]?.pc;
+                if(pc) {
+                    await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
+                    const cardTag = document.querySelector(`#card-remote-${event.senderId} .tag-name`);
+                    if(cardTag) cardTag.innerText = event.data.userName;
+                }
+            }
+            break;
+        case 'ICE':
+            if (event.data.targetId === localUserId) {
+                const pc = peers[event.senderId]?.pc;
+                if(pc) await pc.addIceCandidate(new RTCIceCandidate(event.data.candidate));
+            }
+            break;
+        case 'CHAT_MESSAGE':
+            // CORREGIDO: Bloque único y limpio para mensajes
+            if (event.data.isPrivate) {
+                if (event.data.target === getMyName()) {
+                    ChatAPI.receive(event.data.sender, event.data.text, true);
+                }
+            } else {
+                ChatAPI.receive(event.data.sender, event.data.text, false);
+            }
+            break;
+        case 'REACTION':
+            ReactionAPI.showRemoteReaction(event.data.emoji, event.data.sender);
+            break;
+        case 'TYPING':
+            if (!event.data.isPrivate || event.data.target === getMyName()) {
+                ChatAPI.showTyping(event.data.sender);
+            }
+            break;
+        case 'STOP_TYPING':
+            if (!event.data.isPrivate || event.data.target === getMyName()) {
+                ChatAPI.hideTyping();
+            }
+            break;
+        case 'SUBTITLE':
+            SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
+            break;
+        case 'SCREEN_SHARE_STARTED':
+            const chat = document.getElementById('chat-sala');
+            chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 ${event.data.userName} está compartiendo pantalla.</div></div>`;
+            break;
+    }
+});
 
                     setTimeout(() => {
                         NetworkAPI.broadcastEvent('HELLO', { userName: getMyName() });
