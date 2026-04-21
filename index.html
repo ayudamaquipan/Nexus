@@ -614,23 +614,24 @@
                     
                     <div style="position: relative; display: flex; justify-content: center;">
                         <div class="reactions-menu" id="reactionsMenu">
-    <button class="reaction-btn" onclick="ReactionAPI.send('👍')">👍</button>
-    <button class="reaction-btn" onclick="ReactionAPI.send('❤️')">❤️</button>
-    <button class="reaction-btn" onclick="ReactionAPI.send('😂')">😂</button>
-    <button class="reaction-btn" onclick="ReactionAPI.send('👏')">👏</button>
-    <button class="reaction-btn" onclick="ReactionAPI.send('🚀')">🚀</button>
-</div>
+                <button class="reaction-btn" onclick="ReactionAPI.send('👍')">👍</button>
+                <button class="reaction-btn" onclick="ReactionAPI.send('❤️')">❤️</button>
+                <button class="reaction-btn" onclick="ReactionAPI.send('😂')">😂</button>
+                <button class="reaction-btn" onclick="ReactionAPI.send('👏')">👏</button>
+                <button class="reaction-btn" onclick="ReactionAPI.send('🚀')">🚀</button>
+            </div>
 
-<div class="dock-wrapper">
-    <div class="dock-container">
-        <button class="btn-dock" data-tooltip="Micrófono" id="btnMic" onclick="MediaAPI.toggleMic(this)">🎤</button>
-        <button class="btn-dock" data-tooltip="Cámara" id="btnCam" onclick="MediaAPI.toggleCam(this)">📹</button>
-        
-        <div class="dock-divider"></div>
-        
-        <button class="btn-dock" data-tooltip="Reacciones" onclick="ReactionAPI.toggleMenu()">✨</button>
+            <div class="dock-wrapper">
+                <div class="dock-container">
+                    <button class="btn-dock" data-tooltip="Micrófono" id="btnMic" onclick="MediaAPI.toggleMic(this)">🎤</button>
+                    <button class="btn-dock" data-tooltip="Cámara" id="btnCam" onclick="MediaAPI.toggleCam(this)">📹</button>
+                    
+                    <div class="dock-divider"></div>
+                    
+                    <button class="btn-dock" data-tooltip="Reacciones" onclick="ReactionAPI.toggleMenu()">✨</button>
 
-        <div class="dock-divider"></div>
+                    <div class="dock-divider"></div>
+                    
                     <button class="btn-dock" id="btnSidebarToggle" data-tooltip="Ocultar Panel" onclick="UIAPI.toggleSidebar(this)">🗂️</button>
                     <button class="btn-dock danger" data-tooltip="Salir de la llamada" onclick="ExitAPI.leaveCall()">📞</button>
                     <button class="btn-dock btn-end" id="btnEndMeeting" data-tooltip="Terminar para todos" onclick="ExitAPI.promptEndMeeting()" style="display: none;">🛑</button>
