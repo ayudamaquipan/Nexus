@@ -1340,28 +1340,28 @@
         const database = firebase.database();
 
         // --- MOTOR DE COMUNICACIÓN EN RED ---
+        // --- MOTOR DE COMUNICACIÓN EN RED ---
         const NetworkAPI = (() => {
             let roomRef = null;
             const localUserId = "user_" + Math.floor(Math.random() * 1000000); 
             
             const peers = {}; 
             const servers = { 
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        /* Servidor TURN público para atravesar firewalls (Para producción, te sugiero crear una cuenta gratuita en Metered.ca o Twilio) */
-        { 
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        { 
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        }
-    ] 
-};
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { 
+                        urls: 'turn:openrelay.metered.ca:80',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
+                    },
+                    { 
+                        urls: 'turn:openrelay.metered.ca:443',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
+                    }
+                ] 
+            };
             
             let receivedBuffers = [];
             let receivingFileMeta = null;
@@ -1400,19 +1400,18 @@
                 let dataChannel = null;
 
                 if (isInitiator) {
-    dataChannel = pc.createDataChannel('nexus-data');
-    setupDataChannel(dataChannel);
-} else {
-    pc.ondatachannel = (event) => {
-        dataChannel = event.channel;
-        setupDataChannel(dataChannel);
-        // NUEVO: Guardar el canal en el diccionario para que el invitado pueda responder con archivos
-        if (peers[remoteUserId]) {
-            peers[remoteUserId].channel = dataChannel;
-        }
-    };
-}
-peers[remoteUserId] = { pc, channel: dataChannel };
+                    dataChannel = pc.createDataChannel('nexus-data');
+                    setupDataChannel(dataChannel);
+                } else {
+                    pc.ondatachannel = (event) => {
+                        dataChannel = event.channel;
+                        setupDataChannel(dataChannel);
+                        if (peers[remoteUserId]) {
+                            peers[remoteUserId].channel = dataChannel;
+                        }
+                    };
+                }
+                peers[remoteUserId] = { pc, channel: dataChannel };
 
                 pc.oniceconnectionstatechange = () => {
                     const state = pc.iceConnectionState;
@@ -1489,29 +1488,23 @@ peers[remoteUserId] = { pc, channel: dataChannel };
             return {
                 initRoom: (roomId, isHost) => {
                     roomRef = database.ref('rooms/' + roomId + '/events');
-                    // --- SISTEMA DE PRESENCIA (NUEVO) ---
                     const presenceRef = database.ref('rooms/' + roomId + '/presence');
                     const myPresenceRef = presenceRef.child(localUserId);
                     const connectedRef = database.ref('.info/connected');
 
-                    // Cuando Firebase detecta que estamos conectados a internet
                     connectedRef.on('value', (snap) => {
                         if (snap.val() === true) {
-                            // Instrucción vital: "Si me desconecto, bórreme de esta lista"
                             myPresenceRef.onDisconnect().remove();
-                            // Agregarnos a la lista de activos
                             myPresenceRef.set({ name: getMyName() });
                         }
                     });
 
-                    // --- 1. Escuchar a los que entran o YA ESTABAN ---
                     presenceRef.on('child_added', (snapshot) => {
                         const userId = snapshot.key;
                         const userData = snapshot.val();
                         
-                        if (userId === localUserId) return; // No agregarnos a nosotros mismos
+                        if (userId === localUserId) return; 
                         
-                        // Agregar a la lista de usuarios en el panel lateral si no está
                         const usersList = document.getElementById('usersList');
                         if(!document.getElementById(`list-user-${userId}`)) {
                             usersList.innerHTML += `
@@ -1521,113 +1514,112 @@ peers[remoteUserId] = { pc, channel: dataChannel };
                         }
                     });
 
-                    // --- 2. Escuchar cuando alguien abandona la sala ---
                     presenceRef.on('child_removed', (snapshot) => {
                         const leftUserId = snapshot.key;
                         const leftUserName = snapshot.val().name;
                         
-                        // 1. Destruir la tarjeta de video
                         const card = document.getElementById(`card-remote-${leftUserId}`);
                         if(card) card.remove();
                         
-                        // 2. Eliminarlo de la barra lateral (Panel de usuarios)
                         const userItem = document.getElementById(`list-user-${leftUserId}`);
                         if(userItem) userItem.remove();
 
-                        // 3. Cerrar los "tubos" de datos de WebRTC para no gastar memoria
                         if(peers[leftUserId]) {
                             if(peers[leftUserId].pc) peers[leftUserId].pc.close();
                             delete peers[leftUserId];
                         }
 
-                        // 4. Avisar sutilmente en el chat general
                         const chatSala = document.getElementById('chat-sala');
                         if (chatSala) {
                             chatSala.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:rgba(255,42,109,0.1); border-color:var(--neon-red); font-size:0.8rem; text-align:center; color: var(--text-main);">🏃 <b>${leftUserName}</b> ha abandonado la sala.</div></div>`;
                             chatSala.scrollTop = chatSala.scrollHeight;
                         }
                     });
-                    // --- FIN SISTEMA DE PRESENCIA ---
-                    // NUEVO: Guardamos el momento exacto en el que entramos para ignorar el pasado
-const joinTime = Date.now();
 
-// NUEVO: Filtramos la consulta usando orderByChild y startAt
-roomRef.orderByChild('timestamp').startAt(joinTime).on('child_added', async (snapshot) => {
-    const event = snapshot.val();
-    if(event.senderId === localUserId) return; 
+                    // 1. SOLUCIÓN AL RELOJ: Obtenemos el desfase de tiempo con Firebase
+                    firebase.database().ref('.info/serverTimeOffset').once('value').then(offsetSnap => {
+                        const serverTimeOffset = offsetSnap.val() || 0;
+                        const joinTime = Date.now() + serverTimeOffset - 5000;
 
-    switch(event.type) {
-        case 'HELLO':
-            // Como ignoramos el pasado, el nuevo no ve nuestro HELLO.
-            // Por lo tanto, TÚ (que ya estabas en la sala) al recibir el HELLO del nuevo,
-            // SIEMPRE debes ser el que inicie la llamada (isInitiator = true).
-            await setupWebRTC(event.senderId, true, event.data.userName);
-            break;
-        case 'OFFER':
-            if (event.data.targetId === localUserId) {
-                const pc = await setupWebRTC(event.senderId, false, event.data.userName);
-                await pc.setRemoteDescription(new RTCSessionDescription(event.data.offer));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                NetworkAPI.broadcastEvent('ANSWER', { 
-                    answer, 
-                    targetId: event.senderId, 
-                    userName: getMyName() 
-                });
-            }
-            break;
-        case 'ANSWER':
-            if (event.data.targetId === localUserId) {
-                const pc = peers[event.senderId]?.pc;
-                if(pc) {
-                    await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
-                    const cardTag = document.querySelector(`#card-remote-${event.senderId} .tag-name`);
-                    if(cardTag) cardTag.innerText = event.data.userName;
-                }
-            }
-            break;
-        case 'ICE':
-            if (event.data.targetId === localUserId) {
-                const pc = peers[event.senderId]?.pc;
-                if(pc) await pc.addIceCandidate(new RTCIceCandidate(event.data.candidate));
-            }
-            break;
-        case 'CHAT_MESSAGE':
-            // CORREGIDO: Bloque único y limpio para mensajes
-            if (event.data.isPrivate) {
-                if (event.data.target === getMyName()) {
-                    ChatAPI.receive(event.data.sender, event.data.text, true);
-                }
-            } else {
-                ChatAPI.receive(event.data.sender, event.data.text, false);
-            }
-            break;
-        case 'REACTION':
-            ReactionAPI.showRemoteReaction(event.data.emoji, event.data.sender);
-            break;
-        case 'TYPING':
-            if (!event.data.isPrivate || event.data.target === getMyName()) {
-                ChatAPI.showTyping(event.data.sender);
-            }
-            break;
-        case 'STOP_TYPING':
-            if (!event.data.isPrivate || event.data.target === getMyName()) {
-                ChatAPI.hideTyping();
-            }
-            break;
-        case 'SUBTITLE':
-            SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
-            break;
-        case 'SCREEN_SHARE_STARTED':
-            const chat = document.getElementById('chat-sala');
-            chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 ${event.data.userName} está compartiendo pantalla.</div></div>`;
-            break;
-    }
-});
+                        roomRef.orderByChild('timestamp').startAt(joinTime).on('child_added', async (snapshot) => {
+                            const event = snapshot.val();
+                            if(event.senderId === localUserId) return; 
 
-                    setTimeout(() => {
-                        NetworkAPI.broadcastEvent('HELLO', { userName: getMyName() });
-                    }, 1000);
+                            switch(event.type) {
+                                case 'HELLO':
+                                    await setupWebRTC(event.senderId, true, event.data.userName);
+                                    break;
+                                case 'OFFER':
+                                    if (event.data.targetId === localUserId) {
+                                        const pc = await setupWebRTC(event.senderId, false, event.data.userName);
+                                        await pc.setRemoteDescription(new RTCSessionDescription(event.data.offer));
+                                        const answer = await pc.createAnswer();
+                                        await pc.setLocalDescription(answer);
+                                        NetworkAPI.broadcastEvent('ANSWER', { 
+                                            answer, 
+                                            targetId: event.senderId, 
+                                            userName: getMyName() 
+                                        });
+                                    }
+                                    break;
+                                case 'ANSWER':
+                                    if (event.data.targetId === localUserId) {
+                                        const pc = peers[event.senderId]?.pc;
+                                        if(pc) {
+                                            await pc.setRemoteDescription(new RTCSessionDescription(event.data.answer));
+                                            const cardTag = document.querySelector(`#card-remote-${event.senderId} .tag-name`);
+                                            if(cardTag) cardTag.innerText = event.data.userName;
+                                        }
+                                    }
+                                    break;
+                                case 'ICE':
+                                    if (event.data.targetId === localUserId) {
+                                        const pc = peers[event.senderId]?.pc;
+                                        if(pc && pc.remoteDescription) {
+                                            try {
+                                                await pc.addIceCandidate(new RTCIceCandidate(event.data.candidate));
+                                            } catch (e) {
+                                                console.warn("Ignorando candidato ICE (muy temprano o inválido):", e);
+                                            }
+                                        }
+                                    }
+                                    break;
+                                case 'CHAT_MESSAGE':
+                                    if (event.data.isPrivate) {
+                                        if (event.data.target === getMyName()) {
+                                            ChatAPI.receive(event.data.sender, event.data.text, true);
+                                        }
+                                    } else {
+                                        ChatAPI.receive(event.data.sender, event.data.text, false);
+                                    }
+                                    break;
+                                case 'REACTION':
+                                    ReactionAPI.showRemoteReaction(event.data.emoji, event.data.sender);
+                                    break;
+                                case 'TYPING':
+                                    if (!event.data.isPrivate || event.data.target === getMyName()) {
+                                        ChatAPI.showTyping(event.data.sender);
+                                    }
+                                    break;
+                                case 'STOP_TYPING':
+                                    if (!event.data.isPrivate || event.data.target === getMyName()) {
+                                        ChatAPI.hideTyping();
+                                    }
+                                    break;
+                                case 'SUBTITLE':
+                                    SpeechAPI.displaySubtitle(event.data.userName, event.data.text);
+                                    break;
+                                case 'SCREEN_SHARE_STARTED':
+                                    const chat = document.getElementById('chat-sala');
+                                    chat.innerHTML += `<div class="msg"><div class="msg-bubble" style="background:var(--neon-purple); color:white; cursor:pointer;" onclick="UIAPI.toggleFullScreen(document.getElementById('${event.data.id}'))">📺 ${event.data.userName} está compartiendo pantalla.</div></div>`;
+                                    break;
+                            }
+                        });
+
+                        setTimeout(() => {
+                            NetworkAPI.broadcastEvent('HELLO', { userName: getMyName() });
+                        }, 1000);
+                    });
                 },
                 
                 broadcastEvent: (type, data) => {
@@ -1648,10 +1640,9 @@ roomRef.orderByChild('timestamp').startAt(joinTime).on('child_added', async (sna
                 sendFileP2P: (file, progressCallback) => {
                     const myName = getMyName();
                     
-                    // Solo intentar enviar a usuarios que tengan el canal abierto
                     const activePeers = Object.values(peers).filter(p => p.channel && p.channel.readyState === 'open');
                     if(activePeers.length === 0) {
-                        if(progressCallback) progressCallback(100); // Si estás solo, lo da por enviado
+                        if(progressCallback) progressCallback(100);
                         return;
                     }
 
@@ -1672,7 +1663,6 @@ roomRef.orderByChild('timestamp').startAt(joinTime).on('child_added', async (sna
                         };
 
                         reader.onload = (e) => {
-                            // Control de Buffer (Backpressure)
                             if (dc.bufferedAmount > 1024 * 1024 * 2) { 
                                 setTimeout(() => reader.onload(e), 50); 
                                 return;
@@ -1682,7 +1672,6 @@ roomRef.orderByChild('timestamp').startAt(joinTime).on('child_added', async (sna
                                 dc.send(e.target.result); 
                                 offset += e.target.result.byteLength;
                                 
-                                // Avisar a la interfaz cómo vamos
                                 const progress = Math.floor((offset / file.size) * 100);
                                 if(progressCallback) progressCallback(progress);
 
@@ -1700,15 +1689,13 @@ roomRef.orderByChild('timestamp').startAt(joinTime).on('child_added', async (sna
                     });
                 },
                 replaceVideoTrack: (newVideoTrack) => {
-                        // Busca todas las conexiones abiertas con otras personas
-                        Object.values(peers).forEach(peer => {
-                            if(peer.pc) {
-                                // Busca el "tubo" que envía video y reemplaza el origen
-                                const sender = peer.pc.getSenders().find(s => s.track && s.track.kind === 'video');
-                                if(sender) sender.replaceTrack(newVideoTrack);
-                            }
-                        });
-                    }
+                    Object.values(peers).forEach(peer => {
+                        if(peer.pc) {
+                            const sender = peer.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+                            if(sender) sender.replaceTrack(newVideoTrack);
+                        }
+                    });
+                }
             };
         })();
   
